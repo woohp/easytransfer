@@ -10,7 +10,7 @@ def main()
   ip = Net::HTTP.get(URI('http://automation.whatismyip.com/n09230945.asp'))
 
   absolute_path = File.expand_path(ARGV[0])
-  uri = URI("http://localhost:8080#{absolute_path}")
+  uri = URI("http://localhost:1234#{absolute_path}")
 
   res = Net::HTTP.post_form(uri, '' => '')
   uuid = res.body.to_i
