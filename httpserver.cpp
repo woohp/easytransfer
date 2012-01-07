@@ -5,6 +5,8 @@
 #include <time.h>
 #include <stdint.h>
 #include <assert.h>
+#include <signal.h>
+#include <setjmp.h>
 #include <string>
 #include <map>
 #include <boost/filesystem.hpp>
@@ -12,6 +14,7 @@
 using namespace boost::filesystem;
 
 
+// functions for logging
 bool verbose = false;
 void log_printf(const char *format, ...)
 {
@@ -25,6 +28,15 @@ void log_printf(const char *format, ...)
 }
 
 
+// functions for long jumping
+static jmp_buf exit_env;
+static void sig_hand(int code)
+{
+    longjmp(exit_env, code);
+}
+
+
+// http handling
 std::string port = "8080";
 std::map<uint64_t, path> mappings;
 void handle_get(mg_connection *conn,
@@ -212,6 +224,8 @@ void *callback(mg_event event,
 }
 
 
+
+// main
 int main(int argc, char *argv[])
 {
     srand(time(NULL));
@@ -231,7 +245,7 @@ int main(int argc, char *argv[])
         }
     }
     // display the all the options
-    log_printf("Starting server on port %s\n", port.c_str());
+    log_printf("Starting server on port %s.\n", port.c_str());
 
 
     // start the server
@@ -246,9 +260,23 @@ int main(int argc, char *argv[])
         fputs("Failed to start server.\n", stderr);
         return 0;
     }
-    log_printf("Press ENTER to quit.\n");
-    getchar();
-    mg_stop(ctx);
+    log_printf("Server is now running. Press CTRL-C to quit.\n");
+
+    // set the long jump
+    if (setjmp(exit_env) != 0)
+    {
+        mg_stop(ctx);
+        exit(EXIT_SUCCESS);
+    }
+    else
+    {
+        signal(SIGINT, sig_hand);
+        signal(SIGTERM, sig_hand);
+        signal(SIGQUIT, sig_hand);
+    }
+
+    // go to sleep for a very long time
+    sleep(0xffffffff);
     
     return 0;
 }
