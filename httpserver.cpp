@@ -10,6 +10,8 @@
 #include <string>
 #include <map>
 #include <boost/filesystem.hpp>
+#include <miniupnpc/miniupnpc.h>
+#include <miniupnpc/upnpcommands.h>
 #include "mongoose.h"
 using namespace boost::filesystem;
 
@@ -36,8 +38,107 @@ static void sig_hand(int code)
 }
 
 
+// UPnP discovery
+std::string port = "1234";
+bool upnp_discovery()
+{
+    log_printf("Starting UPnP discovery.\n");
+    int error = 0;
+
+    UPNPDev *devlist = upnpDiscover(2000, NULL, NULL, 0, 0, &error);
+    if (!devlist)
+    {
+        log_printf("upnp discovery failed.\n");
+        return false;
+    }
+
+    UPNPUrls urls;
+    IGDdatas data;
+    char lanaddr[64];	/* my ip address on the LAN */
+
+    int i = UPNP_GetValidIGD(devlist, &urls, &data,
+                             lanaddr, sizeof(lanaddr));
+
+    switch (i)
+    {
+    case 1:
+        log_printf("Found valid IGD: %s\n", urls.controlURL);
+        break;
+    case 2:
+        log_printf("Found a (not connected?) IGD: %s\n"
+                   "Trying to continue anyway\n",
+                   urls.controlURL);
+        break;
+    case 3:
+        log_printf("UPnP device found. Is it an IGD? %s\n"
+                   "Trying to continue anyway\n",
+                   urls.controlURL);
+        break;
+    default:
+        log_printf("Found device: %s\n",
+                   "Trying to continue anyway\n",
+                   urls.controlURL);
+    }
+    log_printf("Local LAN ip address: %s\n", lanaddr);
+
+
+    char intClient[40];
+    char intPort[6];
+    char duration[16];
+    bool has_mapping = false;
+    for (;;)
+    {
+        int r = UPNP_GetSpecificPortMappingEntry(
+            urls.controlURL,
+            data.first.servicetype,
+            port.c_str(),
+            "TCP",
+            intClient, intPort, NULL, NULL, duration);
+
+        if (r != UPNPCOMMAND_SUCCESS)
+            break;
+        if (!strcmp(intClient, lanaddr))
+        {
+            has_mapping = true;
+            break;
+        }
+
+        log_printf("external port %s already taken.\n", port.c_str());
+        char new_port[8];
+        srand(0);
+        sprintf(new_port, "%d", rand() % 10000 + 1234);
+        port = new_port;
+    }
+    srand(time(NULL));
+
+    if (has_mapping)
+    {
+        log_printf("mapping already exists for port %s\n", port.c_str());
+        return true;
+    }
+
+    int r = UPNP_AddPortMapping(
+        urls.controlURL,
+        data.first.servicetype,
+        port.c_str(),
+        port.c_str(),
+        lanaddr,
+        NULL,
+        "TCP",
+        NULL,
+        "0");
+    if (r)
+    {
+        log_printf("mapping failed for port %s\n", port.c_str());
+        return false;
+    }
+    
+    log_printf("mapping added for port %s\n", port.c_str());
+    return true;
+}
+
+
 // http handling
-std::string port = "8080";
 std::map<uint64_t, path> mappings;
 void handle_get(mg_connection *conn,
                 const mg_request_info *request)
@@ -244,12 +345,16 @@ int main(int argc, char *argv[])
             break;
         }
     }
-    // display the all the options
-    log_printf("Starting server on port %s.\n", port.c_str());
+
+
+    // do UPnP discovery
+    upnp_discovery();
 
 
     // start the server
-    const char* options[] = {
+    log_printf("Starting server on port %s.\n", port.c_str());
+    const char* options[] =
+    {
         "listening_ports", port.c_str(),
         "enable_directory_listing", "no",
         NULL
