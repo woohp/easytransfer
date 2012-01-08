@@ -10,10 +10,23 @@
 #include <string>
 #include <map>
 #include <boost/filesystem.hpp>
+#include <boost/random.hpp>
 #include <miniupnpc/miniupnpc.h>
 #include <miniupnpc/upnpcommands.h>
 #include "mongoose.h"
 using namespace boost::filesystem;
+using namespace boost::random;
+
+mt19937 rng(time(NULL));
+
+
+// utility functions
+const char* to_string(int i)
+{
+    static char buffer[11];
+    sprintf(buffer, "%d\n", i);
+    return buffer;
+}
 
 
 // functions for logging
@@ -39,7 +52,7 @@ static void sig_hand(int code)
 
 
 // UPnP discovery
-std::string port = "1234";
+std::string port = "1235";
 bool upnp_discovery()
 {
     log_printf("Starting UPnP discovery.\n");
@@ -86,6 +99,7 @@ bool upnp_discovery()
     char intPort[6];
     char duration[16];
     bool has_mapping = false;
+    static uniform_smallint<uint16_t> port_gen(5000, 65535);
     for (;;)
     {
         int r = UPNP_GetSpecificPortMappingEntry(
@@ -104,12 +118,8 @@ bool upnp_discovery()
         }
 
         log_printf("external port %s already taken.\n", port.c_str());
-        char new_port[8];
-        srand(0);
-        sprintf(new_port, "%d", rand() % 10000 + 1234);
-        port = new_port;
+        port = to_string(port_gen(rng));
     }
-    srand(time(NULL));
 
     if (has_mapping)
     {
@@ -188,6 +198,8 @@ void handle_get(mg_connection *conn,
 void handle_post(mg_connection *conn,
                  const mg_request_info *request)
 {
+    static uniform_int_distribution<uint64_t> uuid_gen(
+        0x100000000LL, 0x4000000000000000LL);
     const char *response_status = NULL;
     char response_content[256] = "";
 
@@ -220,9 +232,7 @@ void handle_post(mg_connection *conn,
                 fclose(file);
 
                 // create the mapping
-                uint64_t uuid = (uint64_t)rand();
-                uuid <<= 32;
-                uuid |= (uint64_t)rand();
+                uint64_t uuid = uuid_gen(rng);
                 mappings[uuid] = p;
 
                 log_printf("created mapping: %llu - %s\n",
@@ -329,8 +339,6 @@ void *callback(mg_event event,
 // main
 int main(int argc, char *argv[])
 {
-    srand(time(NULL));
-
     // parse the commandline arguments
     int opt = -1;
     while ((opt = getopt(argc, argv, "p:v")) != -1)
