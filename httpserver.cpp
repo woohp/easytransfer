@@ -71,7 +71,7 @@ void handle_get(mg_connection *conn,
             {
                 fclose(file);
 
-                mg_send_file(conn, p.c_str());
+                mg_send_file(conn, p.c_str(), p.filename().c_str());
                 mappings.erase(uuid);
                 return;
             }
@@ -276,7 +276,8 @@ int main(int argc, char *argv[])
     }
 
     // go to sleep for a very long time
-    sleep(0xffffffff);
+    for (;;)
+        sleep(0xffffffff);
     
     return 0;
 }

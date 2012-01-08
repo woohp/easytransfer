@@ -2506,8 +2506,8 @@ static void gmt_time_string(char *buf, size_t buf_len, time_t *t) {
 }
 
 static void handle_file_request(struct mg_connection *conn, const char *path,
-                                struct mgstat *stp) {
-  char date[64], lm[64], etag[64], range[64];
+                                struct mgstat *stp, const char *filename) {
+  char date[64], lm[64], etag[64], range[64], filename_tag[256];
   const char *msg = "OK", *hdr;
   time_t curtime = time(NULL);
   int64_t cl, r1, r2;
@@ -2549,17 +2549,26 @@ static void handle_file_request(struct mg_connection *conn, const char *path,
   (void) mg_snprintf(conn, etag, sizeof(etag), "%lx.%lx",
       (unsigned long) stp->mtime, (unsigned long) stp->size);
 
+  // Prepare the filename
+  if (filename)
+      mg_snprintf(conn, filename_tag, sizeof (filename_tag),
+                  "Content-disposition: attachment: filename=%s\r\n",
+                  filename);
+  else
+      filename_tag[0] = '\0';
+
   (void) mg_printf(conn,
       "HTTP/1.1 %d %s\r\n"
       "Date: %s\r\n"
       "Last-Modified: %s\r\n"
       "Etag: \"%s\"\r\n"
+      "%s"
       "Content-Type: %.*s\r\n"
       "Content-Length: %" INT64_FMT "\r\n"
       "Connection: %s\r\n"
       "Accept-Ranges: bytes\r\n"
       "%s\r\n",
-      conn->request_info.status_code, msg, date, lm, etag,
+      conn->request_info.status_code, msg, date, lm, etag, filename_tag,
       mime_vec.len, mime_vec.ptr, cl, suggest_connection_header(conn), range);
 
   if (strcmp(conn->request_info.request_method, "HEAD") != 0) {
@@ -2568,10 +2577,11 @@ static void handle_file_request(struct mg_connection *conn, const char *path,
   (void) fclose(fp);
 }
 
-void mg_send_file(struct mg_connection *conn, const char *path) {
+void mg_send_file(struct mg_connection *conn, const char *path, \
+                  const char *filename) {
   struct mgstat st;
   if (mg_stat(path, &st) == 0) {
-    handle_file_request(conn, path, &st);
+    handle_file_request(conn, path, &st, filename);
   } else {
     send_http_error(conn, 404, "Not Found", "%s", "File not found");
   }
@@ -3377,7 +3387,7 @@ static void handle_request(struct mg_connection *conn) {
   } else if (is_not_modified(conn, &st)) {
     send_http_error(conn, 304, "Not Modified", "");
   } else {
-    handle_file_request(conn, path, &st);
+    handle_file_request(conn, path, &st, NULL);
   }
 }
 
