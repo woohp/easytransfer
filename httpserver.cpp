@@ -53,6 +53,8 @@ static void sig_hand(int code)
 
 // UPnP discovery
 std::string port = "1235";
+UPNPUrls urls;
+IGDdatas data;
 bool upnp_discovery()
 {
     log_printf("Starting UPnP discovery.\n");
@@ -65,13 +67,10 @@ bool upnp_discovery()
         return false;
     }
 
-    UPNPUrls urls;
-    IGDdatas data;
     char lanaddr[64];	/* my ip address on the LAN */
 
     int i = UPNP_GetValidIGD(devlist, &urls, &data,
                              lanaddr, sizeof(lanaddr));
-
     switch (i)
     {
     case 1:
@@ -356,7 +355,7 @@ int main(int argc, char *argv[])
 
 
     // do UPnP discovery
-    upnp_discovery();
+    bool use_upnp = upnp_discovery();
 
 
     // start the server
@@ -379,6 +378,14 @@ int main(int argc, char *argv[])
     if (setjmp(exit_env) != 0)
     {
         mg_stop(ctx);
+        if (use_upnp)
+        {
+            int r = UPNP_DeletePortMapping(
+                urls.controlURL, data.first.servicetype,
+                port.c_str(), "TCP", NULL);
+            if (r)
+                log_printf("failed to delete port mapping: %d\n", r);
+        }
         exit(EXIT_SUCCESS);
     }
     else
