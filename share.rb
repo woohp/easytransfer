@@ -8,7 +8,7 @@ def main()
   end
 
   ip = Net::HTTP.get(URI('http://automation.whatismyip.com/n09230945.asp'))
-  port = 1234
+  port = 1235
 
   absolute_path = File.expand_path(ARGV[0])
   uri = URI(URI.escape("http://localhost:#{port}#{absolute_path}"))

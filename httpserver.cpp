@@ -13,11 +13,16 @@
 #include <boost/random.hpp>
 #include <miniupnpc/miniupnpc.h>
 #include <miniupnpc/upnpcommands.h>
+#include <archive.h>
+#include <archive_entry.h>
 #include "mongoose.h"
+using namespace boost;
 using namespace boost::filesystem;
 using namespace boost::random;
 
 mt19937 rng(time(NULL));
+std::string port = "1235";
+std::map<uint64_t, path> mappings;
 
 
 // utility functions
@@ -52,7 +57,6 @@ static void sig_hand(int code)
 
 
 // UPnP discovery
-std::string port = "1235";
 UPNPUrls urls;
 IGDdatas data;
 bool upnp_discovery()
@@ -147,8 +151,58 @@ bool upnp_discovery()
 }
 
 
-// http handling
-std::map<uint64_t, path> mappings;
+// compress and entire directory
+// assumes that directory_path is valid
+void compress_directory(const path& directory_path,
+                        const path& outname)
+{
+    struct archive *a = archive_write_new();
+    archive_write_set_compression_gzip(a);
+    archive_write_set_format_pax_restricted(a);
+    archive_write_open_filename(a, outname.c_str());
+    struct archive_entry *entry = archive_entry_new();
+    
+    int len = strlen(directory_path.parent_path().c_str()) + 1;
+
+    recursive_directory_iterator end;
+    recursive_directory_iterator iter(directory_path);
+    while (iter != end)
+    {
+        const path& p = iter->path();
+        iter++;
+
+        if (is_directory(p))
+        {
+            ++iter;
+            continue;
+        }
+
+        archive_entry_set_pathname(entry, p.c_str() + len);
+        archive_entry_set_size(entry, file_size(p));
+        archive_entry_set_filetype(entry, AE_IFREG);
+        archive_entry_set_perm(entry, 0644);
+        archive_write_header(a, entry);
+
+        FILE *file = fopen(p.c_str(), "rb");
+        char buffer[8192];
+        int len;
+        do
+        {
+            len = fread(buffer, 1, sizeof(buffer), file);
+            archive_write_data(a, buffer, len);
+        } while (len == sizeof(buffer));
+        fclose(file);
+        archive_entry_clear(entry);
+        
+        ++iter;
+    }
+
+    archive_write_close(a);
+    archive_write_finish(a);
+}
+
+
+// handle GET requests
 void handle_get(mg_connection *conn,
                 const mg_request_info *request)
 {
@@ -164,17 +218,28 @@ void handle_get(mg_connection *conn,
     else
     {
         path p = mappings[uuid];
-        if (!exists(p) || is_directory(p))
+        if (!exists(p))
         {
             log_printf("file no longer exists: %s\n", p.c_str());
+            mappings.erase(uuid);
             response_status = "410 Gone";
         }
         else
         {
+            // if it's a directory, compress it
+            if (is_directory(p))
+            {
+                path new_path = temp_directory_path() / p.filename();
+                new_path.replace_extension(".tgz");
+                compress_directory(p, new_path);
+                p = new_path;
+            }
+
             FILE *file = fopen(p.c_str(), "r");
             if (file == NULL)
             {
                 log_printf("failed to open file: %s\n", p.c_str());
+                mappings.erase(uuid);
                 response_status = "410 Gone";
             }
             else
@@ -194,10 +259,12 @@ void handle_get(mg_connection *conn,
               response_status);
 }
 
+
+// handle POST requests
 void handle_post(mg_connection *conn,
                  const mg_request_info *request)
 {
-    static uniform_int_distribution<uint64_t> uuid_gen(
+    static uniform_int<uint64_t> uuid_gen(
         0x100000000LL, 0x4000000000000000LL);
     const char *response_status = NULL;
     char response_content[256] = "";
@@ -205,40 +272,32 @@ void handle_post(mg_connection *conn,
     path p(request->uri);
     if (exists(p))
     {
-        if (is_directory(p))
+        FILE *file = fopen(p.c_str(), "r");
+        if (file == NULL)
         {
-            log_printf("error: is directory\n");
-            response_status = "400 Bad Request";
-        }
-        else
-        {
-            FILE *file = fopen(p.c_str(), "r");
-            if (file == NULL)
+            if (errno == EACCES)
             {
-                if (errno == EACCES)
-                {
-                    log_printf("error: no permission\n");
-                    response_status = "403 Forbidden";
-                }
-                else
-                {
-                    log_printf("error: errno = %d\n", errno);
-                    response_status = "400 Bad Request";
-                }
+                log_printf("error: no permission\n");
+                response_status = "403 Forbidden";
             }
             else
             {
-                fclose(file);
-
-                // create the mapping
-                uint64_t uuid = uuid_gen(rng);
-                mappings[uuid] = p;
-
-                log_printf("created mapping: %llu - %s\n",
-                           uuid, request->uri);
-                response_status = "201 Created";
-                sprintf(response_content, "%llu", uuid);
+                log_printf("error: errno = %d\n", errno);
+                response_status = "400 Bad Request";
             }
+        }
+        else
+        {
+            fclose(file);
+
+            // create the mapping
+            uint64_t uuid = uuid_gen(rng);
+            mappings[uuid] = p;
+
+            log_printf("created mapping: %llu - %s\n",
+                       uuid, request->uri);
+            response_status = "201 Created";
+            sprintf(response_content, "%llu", uuid);
         }
     }
     else
@@ -256,6 +315,8 @@ void handle_post(mg_connection *conn,
               response_status, response_content);
 }
 
+
+// handle DELETE requests
 void handle_delete(mg_connection *conn,
                    const mg_request_info *request)
 {
@@ -281,6 +342,8 @@ void handle_delete(mg_connection *conn,
               "%s", response_status);
 }
 
+
+// HTTP callback
 void *callback(mg_event event,
                mg_connection *conn,
                const mg_request_info *request)
@@ -303,6 +366,7 @@ void *callback(mg_event event,
         if (request->remote_ip == 0x7f000001 && request->uri[1] == '\0')
         {
             log_printf("current state requested\n");
+
             
             mg_printf(conn, "HTTP/1.1 200 OK\r\n"
                       "Content-Type: text/plain\r\n\r\n");
@@ -357,9 +421,8 @@ int main(int argc, char *argv[])
     // do UPnP discovery
     bool use_upnp = upnp_discovery();
 
-
     // start the server
-    log_printf("Starting server on port %s.\n", port.c_str());
+    log_printf("Starting server on port %s...", port.c_str());
     const char* options[] =
     {
         "listening_ports", port.c_str(),
@@ -369,10 +432,10 @@ int main(int argc, char *argv[])
     mg_context *ctx = mg_start(callback, NULL, options);
     if (!ctx)
     {
-        fputs("Failed to start server.\n", stderr);
+        fputs("failed.\n", stderr);
         return 0;
     }
-    log_printf("Server is now running. Press CTRL-C to quit.\n");
+    log_printf("succeded.\nPress CTRL-C to quit.\n");
 
     // set the long jump
     if (setjmp(exit_env) != 0)
@@ -394,6 +457,17 @@ int main(int argc, char *argv[])
         signal(SIGTERM, sig_hand);
         signal(SIGQUIT, sig_hand);
     }
+
+    path settings_filename = temp_directory_path() / ".httpserver";
+    FILE *settings_file = fopen(settings_filename.c_str(), "w");
+    if (settings_file)
+    {
+        fputs(port.c_str(), settings_file);
+        fclose(settings_file);
+        log_printf("wrote port to settings file.\n");
+    }
+    else
+        log_printf("failed to write settings file.\n");
 
     // go to sleep for a very long time
     for (;;)
