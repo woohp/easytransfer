@@ -20,9 +20,18 @@ using namespace boost;
 using namespace boost::filesystem;
 using namespace boost::random;
 
+
+struct Resource
+{
+    path p;
+    int count;
+    time_t expiration_time;
+};
+
+
 mt19937 rng(time(NULL));
 std::string port = "1235";
-std::map<uint64_t, path> mappings;
+std::map<uint64_t, Resource> mappings;
 
 
 // utility functions
@@ -217,10 +226,18 @@ void handle_get(mg_connection *conn,
     }
     else
     {
-        path p = mappings[uuid];
+        Resource &resource = mappings[uuid];
+        path& p = resource.p;
+
         if (!exists(p))
         {
             log_printf("file no longer exists: %s\n", p.c_str());
+            mappings.erase(uuid);
+            response_status = "410 Gone";
+        }
+        if (resource.expiration_time < time(NULL))
+        {
+            log_printf("file has expired: %s\n", p.c_str());
             mappings.erase(uuid);
             response_status = "410 Gone";
         }
@@ -247,7 +264,8 @@ void handle_get(mg_connection *conn,
                 fclose(file);
 
                 mg_send_file(conn, p.c_str(), p.filename().c_str());
-                mappings.erase(uuid);
+                if (--resource.count == 0)
+                    mappings.erase(uuid);
                 return;
             }
         }
@@ -292,10 +310,28 @@ void handle_post(mg_connection *conn,
 
             // create the mapping
             uint64_t uuid = uuid_gen(rng);
-            mappings[uuid] = p;
 
-            log_printf("created mapping: %llu - %s\n",
-                       uuid, request->uri);
+            Resource resource;
+            resource.p = p;
+            resource.count = 1;
+            int duration = 3600;
+
+            char body[128];
+            char var[16];
+            int body_size = mg_read(conn, body, sizeof(body));
+            log_printf("body: %d, %s\n", body_size, body);
+            if (mg_get_var(body, body_size, "count", var, sizeof(var)) != -1)
+                resource.count = atoi(var);
+            if (mg_get_var(body, body_size, "time", var, sizeof(var)) != -1)
+            {
+                duration = atoi(var);
+                resource.expiration_time = time(NULL) + duration;
+            }
+
+            mappings[uuid] = resource;
+
+            log_printf("created mapping: %llu - %s, count = %d, duration = %d\n",
+                       uuid, request->uri, resource.count, duration);
             response_status = "201 Created";
             sprintf(response_content, "%llu", uuid);
         }
@@ -370,9 +406,9 @@ void *callback(mg_event event,
             
             mg_printf(conn, "HTTP/1.1 200 OK\r\n"
                       "Content-Type: text/plain\r\n\r\n");
-            for (std::map<uint64_t, path>::iterator i = mappings.begin();
+            for (std::map<uint64_t, Resource>::iterator i = mappings.begin();
                  i != mappings.end(); ++i)
-                mg_printf(conn, "\n%llu,%s", i->first, i->second.c_str());
+                mg_printf(conn, "\n%llu,%s", i->first, i->second.p.c_str());
         }
         else
             handle_get(conn, request);
@@ -458,16 +494,17 @@ int main(int argc, char *argv[])
         signal(SIGQUIT, sig_hand);
     }
 
+    log_printf("writing settings file...");
     path settings_filename = temp_directory_path() / ".httpserver";
     FILE *settings_file = fopen(settings_filename.c_str(), "w");
     if (settings_file)
     {
         fputs(port.c_str(), settings_file);
         fclose(settings_file);
-        log_printf("wrote port to settings file.\n");
+        log_printf("succeeded.\n");
     }
     else
-        log_printf("failed to write settings file.\n");
+        log_printf("failed.\n");
 
     // go to sleep for a very long time
     for (;;)
