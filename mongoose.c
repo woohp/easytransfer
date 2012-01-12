@@ -2551,9 +2551,13 @@ static void handle_file_request(struct mg_connection *conn, const char *path,
 
   // Prepare the filename
   if (filename)
-      mg_snprintf(conn, filename_tag, sizeof (filename_tag),
-                  "Content-disposition: attachment; filename=%s\r\n",
-                  filename);
+  {
+      char encoded_filename[256];
+      url_encode(filename, encoded_filename, sizeof(encoded_filename));
+      mg_snprintf(conn, filename_tag, sizeof(filename_tag),
+                  "Content-disposition: attachment; filename*=UTF-8''%s\r\n",
+                  encoded_filename);
+  }
   else
       filename_tag[0] = '\0';
 

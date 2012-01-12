@@ -165,6 +165,9 @@ bool upnp_discovery()
 void compress_directory(const path& directory_path,
                         const path& outname)
 {
+    log_printf("compress directory \"%s\" into \"%s\"\n",
+               directory_path.c_str(), outname.c_str());
+
     struct archive *a = archive_write_new();
     archive_write_set_compression_gzip(a);
     archive_write_set_format_pax_restricted(a);
@@ -178,14 +181,13 @@ void compress_directory(const path& directory_path,
     while (iter != end)
     {
         const path& p = iter->path();
-        iter++;
 
         if (is_directory(p))
         {
             ++iter;
             continue;
         }
-
+        
         archive_entry_set_pathname(entry, p.c_str() + len);
         archive_entry_set_size(entry, file_size(p));
         archive_entry_set_filetype(entry, AE_IFREG);
@@ -193,6 +195,12 @@ void compress_directory(const path& directory_path,
         archive_write_header(a, entry);
 
         FILE *file = fopen(p.c_str(), "rb");
+        if (!file)
+        {
+            log_printf("failed to open file to compress: %s\n", p.c_str());
+            continue;
+        }
+
         char buffer[8192];
         int len;
         do
@@ -271,6 +279,7 @@ void handle_get(mg_connection *conn,
         }
     }
 
+    log_printf("hereersersersersre === \n");
     log_printf("responded with %s\n", response_status);
     mg_printf(conn, "HTTP/1.1 %s\r\n"
               "Content-Type: text/plain\r\n\r\n",
