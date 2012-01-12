@@ -214,7 +214,7 @@ void compress_directory(const path& directory_path,
         FILE *file = fopen(p.c_str(), "rb");
         if (!file)
         {
-            log_printf("failed to open file to compress: %s\n", p.c_str());
+            log_printf("failed to open file for compression: %s\n", p.c_str());
             continue;
         }
 
@@ -494,7 +494,7 @@ int main(int argc, char *argv[])
         fputs("failed.\n", stderr);
         return 0;
     }
-    log_printf("succeded.\nPress CTRL-C to quit.\n");
+    log_printf("succeded.\n");
 
     // set the long jump
     if (setjmp(exit_env) != 0)
@@ -531,6 +531,7 @@ int main(int argc, char *argv[])
         log_printf("failed.\n");
 
     // go to sleep for a very long time
+    log_printf("Press CTRL-C to quit.\n");
     for (;;)
         sleep(0xffffffff);
     
