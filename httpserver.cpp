@@ -419,6 +419,8 @@ void *callback(mg_event event,
                request->request_method,
                request->uri,
                request->remote_ip);
+    for (int i = 0; i < request->num_headers; ++i)
+        log_printf("%s - %s\n", request->http_headers[i]);
 
     if (!strcmp(request->request_method, "GET"))
     {
@@ -431,7 +433,7 @@ void *callback(mg_event event,
                       "Content-Type: text/plain\r\n\r\n");
             for (std::map<uint64_t, Resource>::iterator i = mappings.begin();
                  i != mappings.end(); ++i)
-                mg_printf(conn, "\n%llu,%s", i->first, i->second.p.c_str());
+                mg_printf(conn, "%llu,%s\n", i->first, i->second.p.c_str());
         }
         else
             handle_get(conn, request);
@@ -491,7 +493,7 @@ int main(int argc, char *argv[])
     mg_context *ctx = mg_start(callback, NULL, options);
     if (!ctx)
     {
-        fputs("failed.\n", stderr);
+        log_printf("failed.\n");
         return 0;
     }
     log_printf("succeded.\n");
