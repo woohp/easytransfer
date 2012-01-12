@@ -236,7 +236,7 @@ void handle_get(mg_connection *conn,
 {
     const char *response_status = NULL;
     uint64_t uuid = atoll(request->uri + 1);
-    log_printf("uuid requested: %llu\n", uuid);
+    log_printf("uuid requested: %s\n", request->uri + 1);
 
     // make sure the uuid exists
     if (mappings.find(uuid) == mappings.end())
@@ -324,6 +324,7 @@ void handle_post(mg_connection *conn,
         {
             // create the mapping
             uint64_t uuid = uuid_gen(rng);
+            std::string uuid_str = lexical_cast<std::string>(uuid);
 
             // create resource for only 1 download, expires in 1 hour by default
             Resource resource;
@@ -347,8 +348,8 @@ void handle_post(mg_connection *conn,
             // create the mapping
             mappings[uuid] = resource;
 
-            log_printf("created mapping: %llu - %s, count=%d, duration=%d\n",
-                       uuid, request->uri, resource.count, duration);
+            log_printf("created mapping: %s - %s, count=%d, duration=%d\n",
+                       uuid_str.c_str(), request->uri, resource.count, duration);
             response_status = "201 Created";
             response_content = lexical_cast<std::string>(uuid);
         }
@@ -376,7 +377,7 @@ void handle_delete(mg_connection *conn,
     // get the UUID
     const char *response_status = NULL;
     uint64_t uuid = atoll(request->uri + 1);
-    log_printf("uuid requested: %llu\n", uuid);
+    log_printf("uuid requested: %s\n", request->uri + 1);
 
     // find the UUID, and if found, delete it
     if (mappings.find(uuid) == mappings.end())
@@ -441,7 +442,11 @@ void *callback(mg_event event,
                       "Content-Type: text/plain\r\n\r\n");
             for (std::map<uint64_t, Resource>::iterator i = mappings.begin();
                  i != mappings.end(); ++i)
-                mg_printf(conn, "%llu,%s\n", i->first, i->second.p.c_str());
+                mg_printf(conn, "%s,%s,%s,%s\n",
+                          lexical_cast<std::string>(i->first).c_str(),
+                          i->second.count,
+                          lexical_cast<std::string>(i->second.expiration_time).c_str(),
+                          i->second.p.c_str());
         }
         else
             handle_get(conn, request);
@@ -496,6 +501,7 @@ int main(int argc, char *argv[])
     {
         "listening_ports", port.c_str(),
         "enable_directory_listing", "no",
+        "num_threads", "2",
         NULL
     };
     mg_context *ctx = mg_start(callback, NULL, options);
