@@ -34,15 +34,6 @@ std::string port = "1235";
 std::map<uint64_t, Resource> mappings;
 
 
-// utility functions
-const char* to_string(int i)
-{
-    static char buffer[11];
-    sprintf(buffer, "%d\n", i);
-    return buffer;
-}
-
-
 // functions for logging
 bool verbose = false;
 void log_printf(const char *format, ...)
@@ -53,6 +44,32 @@ void log_printf(const char *format, ...)
         va_start(args, format);
         vfprintf(stdout, format, args);
         va_end(args);
+    }
+}
+
+
+// utility functions
+const char* to_string(int i)
+{
+    static char buffer[11];
+    sprintf(buffer, "%d\n", i);
+    return buffer;
+}
+
+// returns 0 if all good, errno if can't open file
+int check_read_file(const path& p)
+{
+    FILE *file = fopen(p.c_str(), "r");
+    if (file)
+    {
+        fclose(file);
+        return 0;
+    }
+    else
+    {
+        log_printf("failed to open for reading. "
+                   "does it have permissions?\n\t%s\n", p.c_str());
+        return errno;
     }
 }
 
@@ -73,6 +90,7 @@ bool upnp_discovery()
     log_printf("Starting UPnP discovery.\n");
     int error = 0;
 
+    // try to discover devices
     UPNPDev *devlist = upnpDiscover(2000, NULL, NULL, 0, 0, &error);
     if (!devlist)
     {
@@ -80,33 +98,26 @@ bool upnp_discovery()
         return false;
     }
 
-    char lanaddr[64];	/* my ip address on the LAN */
-
+    // try to find valid IGD device
+    char lanaddr[64];	// my ip address on the LAN
     int i = UPNP_GetValidIGD(devlist, &urls, &data,
                              lanaddr, sizeof(lanaddr));
-    switch (i)
-    {
-    case 1:
+    if (i == 1)
         log_printf("Found valid IGD: %s\n", urls.controlURL);
-        break;
-    case 2:
-        log_printf("Found a (not connected?) IGD: %s\n"
-                   "Trying to continue anyway\n",
-                   urls.controlURL);
-        break;
-    case 3:
-        log_printf("UPnP device found. Is it an IGD? %s\n"
-                   "Trying to continue anyway\n",
-                   urls.controlURL);
-        break;
-    default:
-        log_printf("Found device: %s\n",
-                   "Trying to continue anyway\n",
-                   urls.controlURL);
+    else
+    {
+        char *more_info;
+        if (i == 2)
+            more_info = "Found a (not connected?) IGD: %s";
+        else if (i == 3)
+            more_info = "UPnP device found. Is it an IGD? %s";
+        else
+            more_info = "Found device: %s";
+        log_printf("%s\nTrying to continue anyway\n", urls.controlURL);
     }
     log_printf("Local LAN ip address: %s\n", lanaddr);
 
-
+    // see if the external port is already mapped
     char intClient[40];
     char intPort[6];
     char duration[16];
@@ -123,7 +134,7 @@ bool upnp_discovery()
 
         if (r != UPNPCOMMAND_SUCCESS)
             break;
-        if (!strcmp(intClient, lanaddr))
+        if (!strcmp(intClient, lanaddr)) // great if it's mapped to us
         {
             has_mapping = true;
             break;
@@ -139,6 +150,7 @@ bool upnp_discovery()
         return true;
     }
 
+    // try to add the port mapping
     int r = UPNP_AddPortMapping(
         urls.controlURL,
         data.first.servicetype,
@@ -165,15 +177,17 @@ bool upnp_discovery()
 void compress_directory(const path& directory_path,
                         const path& outname)
 {
-    log_printf("compress directory \"%s\" into \"%s\"\n",
+    log_printf("compressing directory \"%s\" into \"%s\"\n",
                directory_path.c_str(), outname.c_str());
 
+    // declare and initialize variables
     struct archive *a = archive_write_new();
     archive_write_set_compression_gzip(a);
     archive_write_set_format_pax_restricted(a);
     archive_write_open_filename(a, outname.c_str());
     struct archive_entry *entry = archive_entry_new();
     
+    // offset of the parent directory's full path
     int len = strlen(directory_path.parent_path().c_str()) + 1;
 
     recursive_directory_iterator end;
@@ -182,18 +196,21 @@ void compress_directory(const path& directory_path,
     {
         const path& p = iter->path();
 
+        // ignore directories
         if (is_directory(p))
         {
             ++iter;
             continue;
         }
         
-        archive_entry_set_pathname(entry, p.c_str() + len);
+        // set headers
+        archive_entry_set_pathname(entry, p.c_str() + len); // add the offset to get rid of the absolute path
         archive_entry_set_size(entry, file_size(p));
         archive_entry_set_filetype(entry, AE_IFREG);
         archive_entry_set_perm(entry, 0644);
         archive_write_header(a, entry);
 
+        // open the file for reading
         FILE *file = fopen(p.c_str(), "rb");
         if (!file)
         {
@@ -227,6 +244,7 @@ void handle_get(mg_connection *conn,
     uint64_t uuid = atoll(request->uri + 1);
     log_printf("uuid requested: %llu\n", uuid);
 
+    // make sure the uuid exists
     if (mappings.find(uuid) == mappings.end())
     {
         log_printf("uuid doesn't exist\n");
@@ -237,12 +255,14 @@ void handle_get(mg_connection *conn,
         Resource &resource = mappings[uuid];
         path& p = resource.p;
 
-        if (!exists(p))
+        // make sure the file exists
+        if (!exists(p)) 
         {
             log_printf("file no longer exists: %s\n", p.c_str());
             mappings.erase(uuid);
             response_status = "410 Gone";
         }
+        // make sure it hasn't expired
         if (resource.expiration_time < time(NULL))
         {
             log_printf("file has expired: %s\n", p.c_str());
@@ -260,17 +280,15 @@ void handle_get(mg_connection *conn,
                 p = new_path;
             }
 
-            FILE *file = fopen(p.c_str(), "r");
-            if (file == NULL)
+            // try to open file to make sure it's readable
+            if (check_read_file(p)) // returning non-zero means error
             {
-                log_printf("failed to open file: %s\n", p.c_str());
                 mappings.erase(uuid);
                 response_status = "410 Gone";
             }
             else
             {
-                fclose(file);
-
+                // send the file
                 mg_send_file(conn, p.c_str(), p.filename().c_str());
                 if (--resource.count == 0)
                     mappings.erase(uuid);
@@ -279,7 +297,6 @@ void handle_get(mg_connection *conn,
         }
     }
 
-    log_printf("hereersersersersre === \n");
     log_printf("responded with %s\n", response_status);
     mg_printf(conn, "HTTP/1.1 %s\r\n"
               "Content-Type: text/plain\r\n\r\n",
@@ -296,35 +313,31 @@ void handle_post(mg_connection *conn,
     const char *response_status = NULL;
     char response_content[256] = "";
 
+    // do validity checking
     path p(request->uri);
     if (exists(p))
     {
-        FILE *file = fopen(p.c_str(), "r");
-        if (file == NULL)
+        // make sure we have permissions to open it for reading
+        int err = check_read_file(p);
+        if (err)
         {
-            if (errno == EACCES)
-            {
-                log_printf("error: no permission\n");
+            if (err == EACCES)
                 response_status = "403 Forbidden";
-            }
             else
-            {
-                log_printf("error: errno = %d\n", errno);
                 response_status = "400 Bad Request";
-            }
         }
         else
         {
-            fclose(file);
-
             // create the mapping
             uint64_t uuid = uuid_gen(rng);
 
+            // create resource for only 1 download, expires in 1 hour
             Resource resource;
             resource.p = p;
             resource.count = 1;
-            int duration = 3600;
+            int duration = 3600; // 3600 seconds
 
+            // get the count and time query variables, if they are provided
             char body[128];
             char var[16];
             int body_size = mg_read(conn, body, sizeof(body));
@@ -337,6 +350,7 @@ void handle_post(mg_connection *conn,
                 resource.expiration_time = time(NULL) + duration;
             }
 
+            // create the mapping
             mappings[uuid] = resource;
 
             log_printf("created mapping: %llu - %s, count = %d, duration = %d\n",
@@ -365,10 +379,12 @@ void handle_post(mg_connection *conn,
 void handle_delete(mg_connection *conn,
                    const mg_request_info *request)
 {
+    // get the UUID
     const char *response_status = NULL;
     uint64_t uuid = atoll(request->uri + 1);
     log_printf("uuid requested: %llu\n", uuid);
 
+    // find the UUID, and if found, delete it
     if (mappings.find(uuid) == mappings.end())
     {
         log_printf("uuid doesn't exist\n");
@@ -396,7 +412,6 @@ void *callback(mg_event event,
     if (event != MG_NEW_REQUEST)
         return (void*)1;
 
-
     log_printf("new request: =====================\n"
                "method: %s\n"
                "uri: %s\n"
@@ -405,14 +420,13 @@ void *callback(mg_event event,
                request->uri,
                request->remote_ip);
 
-
     if (!strcmp(request->request_method, "GET"))
     {
+        // if from localhost and no additional uri, then just list current mappings
         if (request->remote_ip == 0x7f000001 && request->uri[1] == '\0')
         {
             log_printf("current state requested\n");
 
-            
             mg_printf(conn, "HTTP/1.1 200 OK\r\n"
                       "Content-Type: text/plain\r\n\r\n");
             for (std::map<uint64_t, Resource>::iterator i = mappings.begin();
@@ -424,14 +438,14 @@ void *callback(mg_event event,
     }
     else if (!strcmp(request->request_method, "POST"))
     {
-        if (request->remote_ip != 0x7f000001)
+        if (request->remote_ip != 0x7f000001) // only accept from localhost
             log_printf("invalid ip for POST request: %x\n", request->remote_ip);
         else
             handle_post(conn, request);
     }
     else if (!strcmp(request->request_method, "DELETE"))
     {
-        if (request->remote_ip != 0x7f000001)
+        if (request->remote_ip != 0x7f000001) // only accept from localhost
             log_printf("invalid ip for DELETE request: %x\n", request->remote_ip);
         else
             handle_delete(conn, request);
@@ -503,6 +517,7 @@ int main(int argc, char *argv[])
         signal(SIGQUIT, sig_hand);
     }
 
+    // write the port to a temporary settings file
     log_printf("writing settings file...");
     path settings_filename = temp_directory_path() / ".httpserver";
     FILE *settings_file = fopen(settings_filename.c_str(), "w");
