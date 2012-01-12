@@ -11,6 +11,7 @@
 #include <map>
 #include <boost/filesystem.hpp>
 #include <boost/random.hpp>
+#include <boost/lexical_cast.hpp>
 #include <miniupnpc/miniupnpc.h>
 #include <miniupnpc/upnpcommands.h>
 #include <archive.h>
@@ -47,14 +48,6 @@ void log_printf(const char *format, ...)
     }
 }
 
-
-// utility functions
-const char* to_string(int i)
-{
-    static char buffer[11];
-    sprintf(buffer, "%d\n", i);
-    return buffer;
-}
 
 // returns 0 if all good, errno if can't open file
 int check_read_file(const path& p)
@@ -106,14 +99,15 @@ bool upnp_discovery()
         log_printf("Found valid IGD: %s\n", urls.controlURL);
     else
     {
-        char *more_info;
+        const char *more_info;
         if (i == 2)
-            more_info = "Found a (not connected?) IGD: %s";
+            more_info = "Found a (not connected?) IGD:";
         else if (i == 3)
-            more_info = "UPnP device found. Is it an IGD? %s";
+            more_info = "UPnP device found. Is it an IGD?";
         else
-            more_info = "Found device: %s";
-        log_printf("%s\nTrying to continue anyway\n", urls.controlURL);
+            more_info = "Found device:";
+        log_printf("%s %s\nTrying to continue anyway\n",
+                   more_info, urls.controlURL);
     }
     log_printf("Local LAN ip address: %s\n", lanaddr);
 
@@ -141,7 +135,7 @@ bool upnp_discovery()
         }
 
         log_printf("external port %s already taken.\n", port.c_str());
-        port = to_string(port_gen(rng));
+        port = lexical_cast<std::string>(port_gen(rng));
     }
 
     if (has_mapping)
@@ -309,9 +303,9 @@ void handle_post(mg_connection *conn,
                  const mg_request_info *request)
 {
     static uniform_int<uint64_t> uuid_gen(
-        0x100000000LL, 0x4000000000000000LL);
+        0x100000000, 0x4000000000000000);
     const char *response_status = NULL;
-    char response_content[256] = "";
+    std::string response_content;
 
     // do validity checking
     path p(request->uri);
@@ -331,7 +325,7 @@ void handle_post(mg_connection *conn,
             // create the mapping
             uint64_t uuid = uuid_gen(rng);
 
-            // create resource for only 1 download, expires in 1 hour
+            // create resource for only 1 download, expires in 1 hour by default
             Resource resource;
             resource.p = p;
             resource.count = 1;
@@ -353,10 +347,10 @@ void handle_post(mg_connection *conn,
             // create the mapping
             mappings[uuid] = resource;
 
-            log_printf("created mapping: %llu - %s, count = %d, duration = %d\n",
+            log_printf("created mapping: %llu - %s, count=%d, duration=%d\n",
                        uuid, request->uri, resource.count, duration);
             response_status = "201 Created";
-            sprintf(response_content, "%llu", uuid);
+            response_content = lexical_cast<std::string>(uuid);
         }
     }
     else
@@ -371,7 +365,7 @@ void handle_post(mg_connection *conn,
     mg_printf(conn, "HTTP/1.1 %s\r\n"
               "Content-Type: text/plain\r\n\r\n"
               "%s",
-              response_status, response_content);
+              response_status, response_content.c_str());
 }
 
 
@@ -428,6 +422,20 @@ void *callback(mg_event event,
         if (request->remote_ip == 0x7f000001 && request->uri[1] == '\0')
         {
             log_printf("current state requested\n");
+
+            // remove expired mappings
+            std::vector<uint64_t> expired;
+            for (std::map<uint64_t, Resource>::iterator i = mappings.begin();
+                 i != mappings.end(); ++i)
+            {
+                if (i->second.expiration_time < time(NULL))
+                {
+                    log_printf("file has expired: %s\n", i->second.p.c_str());
+                    expired.push_back(i->first);
+                }
+            }
+            for (size_t i = 0; i < expired.size(); ++i)
+                mappings.erase(expired[i]);
 
             mg_printf(conn, "HTTP/1.1 200 OK\r\n"
                       "Content-Type: text/plain\r\n\r\n");
