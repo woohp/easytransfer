@@ -11,6 +11,7 @@
 #include <boost/filesystem.hpp>
 #include <boost/random.hpp>
 #include <boost/lexical_cast.hpp>
+#include <boost/program_options.hpp>
 #include <miniupnpc/miniupnpc.h>
 #include <miniupnpc/upnpcommands.h>
 #include <archive.h>
@@ -19,6 +20,7 @@
 using namespace boost;
 using namespace boost::filesystem;
 using namespace boost::random;
+using namespace boost::program_options;
 
 
 struct Resource
@@ -476,19 +478,26 @@ void *callback(mg_event event,
 int main(int argc, char *argv[])
 {
     // parse the commandline arguments
-    int opt = -1;
-    while ((opt = getopt(argc, argv, "p:v")) != -1)
-    {
-        switch (opt)
-        {
-        case 'p':
-            port = optarg;
-            break;
-        case 'v':
-            verbose = true;
-            break;
-        }
-    }
+	options_description desc("Allowed options");
+	desc.add_options()
+		("help,h", "produce this help message")
+		("verbose,v", "turn on verbose mode")
+		("port,p", value<std::string>(), "specify the port to run on")
+		;
+	variables_map vm;
+	store(parse_command_line(argc, argv, desc), vm);
+	notify(vm);
+
+	if (vm.count("help"))
+	{
+		std::cout << desc << '\n';
+		return 1;
+	}
+
+	if (vm.count("verbose"))
+		verbose = true;
+	if (vm.count("port"))
+		port = vm["port"].as<std::string>();
 
 
     // do UPnP discovery
@@ -529,7 +538,11 @@ int main(int argc, char *argv[])
     {
         signal(SIGINT, sig_hand);
         signal(SIGTERM, sig_hand);
+#ifdef _WIN32
+		signal(SIGBREAK, sig_hand);
+#else
         signal(SIGQUIT, sig_hand);
+#endif
     }
 
     // write the port to a temporary settings file
@@ -548,7 +561,11 @@ int main(int argc, char *argv[])
     // go to sleep for a very long time
     log_printf("Press CTRL-C to quit.\n");
     for (;;)
+#ifdef _WIN32
+		Sleep(0xffffffff);
+#else
         sleep(0xffffffff);
+#endif
     
     return 0;
 }
