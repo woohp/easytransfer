@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include <assert.h>
 #include <signal.h>
-#include <setjmp.h>
 #include <string>
 #include <map>
 #include <boost/filesystem.hpp>
@@ -49,13 +48,18 @@ struct Resource
 };
 
 
-mt19937 rng(time(NULL));
-std::string port = "1235";
-std::map<uint64_t, Resource> mappings;
+// global variables
+mt19937 rng(time(NULL));        // random number generator
+mg_context *ctx = NULL;         // the server instance
+std::string port = "1235";      // the port
+bool use_upnp = false;          // whether we used UPnP to forward ports
+UPNPUrls urls;                  // UPnP variables
+IGDdatas data;
+std::map<uint64_t, Resource> mappings; // maps from uuid to Resource
+bool verbose = false;           // verbose flag
 
 
 // functions for logging
-bool verbose = false;
 void log_printf(const char *format, ...)
 {
     if (verbose)
@@ -86,17 +90,7 @@ int check_read_file(const path& p)
 }
 
 
-// functions for long jumping
-static jmp_buf exit_env;
-static void sig_hand(int code)
-{
-    longjmp(exit_env, code);
-}
-
-
 // UPnP discovery
-UPNPUrls urls;
-IGDdatas data;
 bool upnp_discovery()
 {
     log_printf("Starting UPnP discovery.\n");
@@ -182,6 +176,24 @@ bool upnp_discovery()
     
     log_printf("mapping added for port %s\n", port.c_str());
     return true;
+}
+
+
+static void sig_hand(int code)
+{
+	log_printf("quitting...\n");
+    mg_stop(ctx);
+    if (use_upnp)
+    {
+        int r = UPNP_DeletePortMapping(
+            urls.controlURL, data.first.servicetype,
+			port.c_str(), "TCP", NULL);
+		if (r)
+			log_printf("failed to delete port mapping: %d\n", r);
+		else
+			log_printf("deleted port mapping.\n");
+	}
+	exit(EXIT_SUCCESS);
 }
 
 
@@ -530,7 +542,7 @@ int main(int argc, char *argv[])
         "num_threads", "1",
         NULL
     };
-    mg_context *ctx = mg_start(callback, NULL, options);
+    ctx = mg_start(callback, NULL, options);
     if (!ctx)
     {
         log_printf("failed.\n");
@@ -538,30 +550,9 @@ int main(int argc, char *argv[])
     }
     log_printf("succeded.\n");
 
-    // set the long jump
-    if (setjmp(exit_env) != 0)
-    {
-        mg_stop(ctx);
-        if (use_upnp)
-        {
-            int r = UPNP_DeletePortMapping(
-                urls.controlURL, data.first.servicetype,
-                port.c_str(), "TCP", NULL);
-            if (r)
-                log_printf("failed to delete port mapping: %d\n", r);
-        }
-        exit(EXIT_SUCCESS);
-    }
-    else
-    {
-        signal(SIGINT, sig_hand);
-        signal(SIGTERM, sig_hand);
-#ifdef _WIN32
-		signal(SIGBREAK, sig_hand);
-#else
-        signal(SIGQUIT, sig_hand);
-#endif
-    }
+    signal(SIGINT, sig_hand);
+    signal(SIGTERM, sig_hand);
+    signal(SIGBREAK, sig_hand);
 
     // write the port to a temporary settings file
     log_printf("writing settings file...");
