@@ -531,7 +531,7 @@ int main(int argc, char *argv[])
 
 
     // do UPnP discovery
-    bool use_upnp = upnp_discovery();
+    use_upnp = upnp_discovery();
 
     // start the server
     log_printf("Starting server on port %s...", port.c_str());
@@ -552,7 +552,11 @@ int main(int argc, char *argv[])
 
     signal(SIGINT, sig_hand);
     signal(SIGTERM, sig_hand);
+#ifdef _WIN32
     signal(SIGBREAK, sig_hand);
+#else
+    signal(SIGQUIT, sig_hand);
+#endif
 
     // write the port to a temporary settings file
     log_printf("writing settings file...");
