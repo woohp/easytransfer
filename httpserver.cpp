@@ -23,6 +23,24 @@ using namespace boost::random;
 using namespace boost::program_options;
 
 
+// take care of some windows unicode stuff
+#ifdef _WIN32
+#define T(x) L##x
+const char* to_utf8(const wchar_t* str)
+{
+	static char buffer[512]; // hopefully, 512 is long enough
+	WideCharToMultiByte(CP_UTF8, 0, str, -1, buffer, sizeof(buffer), NULL, NULL);
+	return buffer;
+}
+#define FOPEN _wfopen
+#else
+#define T(x) x
+#define to_utf8(x) x
+#define my_fopen(x) fopen
+#define FOPEN fopen
+#endif
+
+
 struct Resource
 {
     path p;
@@ -53,7 +71,7 @@ void log_printf(const char *format, ...)
 // returns 0 if all good, errno if can't open file
 int check_read_file(const path& p)
 {
-    FILE *file = fopen(p.c_str(), "r");
+    FILE *file = FOPEN(p.c_str(), T("r"));
     if (file)
     {
         fclose(file);
@@ -179,11 +197,11 @@ void compress_directory(const path& directory_path,
     struct archive *a = archive_write_new();
     archive_write_set_compression_gzip(a);
     archive_write_set_format_pax_restricted(a);
-    archive_write_open_filename(a, outname.c_str());
+    archive_write_open_filename(a, to_utf8(outname.c_str()));
     struct archive_entry *entry = archive_entry_new();
     
     // offset of the parent directory's full path
-    int len = strlen(directory_path.parent_path().c_str()) + 1;
+	int len = (directory_path.parent_path().native().length() + 1) * sizeof(path::value_type);
 
     recursive_directory_iterator end;
     recursive_directory_iterator iter(directory_path);
@@ -199,14 +217,14 @@ void compress_directory(const path& directory_path,
         }
         
         // set headers
-        archive_entry_set_pathname(entry, p.c_str() + len); // add the offset to get rid of the absolute path
+        archive_entry_set_pathname(entry, to_utf8(p.c_str()) + len); // add the offset to get rid of the absolute path
         archive_entry_set_size(entry, file_size(p));
         archive_entry_set_filetype(entry, AE_IFREG);
         archive_entry_set_perm(entry, 0644);
         archive_write_header(a, entry);
 
         // open the file for reading
-        FILE *file = fopen(p.c_str(), "rb");
+        FILE *file = FOPEN(p.c_str(), T("rb"));
         if (!file)
         {
             log_printf("failed to open file for compression: %s\n", p.c_str());
@@ -284,7 +302,7 @@ void handle_get(mg_connection *conn,
             else
             {
                 // send the file
-                mg_send_file(conn, p.c_str(), p.filename().c_str());
+                mg_send_file(conn, to_utf8(p.c_str()), to_utf8(p.filename().c_str()));
                 if (--resource.count == 0)
                     mappings.erase(uuid);
                 return;
@@ -509,7 +527,7 @@ int main(int argc, char *argv[])
     {
         "listening_ports", port.c_str(),
         "enable_directory_listing", "no",
-        "num_threads", "2",
+        "num_threads", "1",
         NULL
     };
     mg_context *ctx = mg_start(callback, NULL, options);
@@ -548,7 +566,7 @@ int main(int argc, char *argv[])
     // write the port to a temporary settings file
     log_printf("writing settings file...");
     path settings_filename = temp_directory_path() / ".httpserver";
-    FILE *settings_file = fopen(settings_filename.c_str(), "w");
+    FILE *settings_file = FOPEN(settings_filename.c_str(), T("w"));
     if (settings_file)
     {
         fputs(port.c_str(), settings_file);
