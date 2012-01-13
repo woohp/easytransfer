@@ -1,7 +1,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdarg.h>
-#include <unistd.h>
 #include <time.h>
 #include <stdint.h>
 #include <assert.h>
@@ -235,7 +234,7 @@ void handle_get(mg_connection *conn,
                 const mg_request_info *request)
 {
     const char *response_status = NULL;
-    uint64_t uuid = atoll(request->uri + 1);
+    uint64_t uuid = lexical_cast<uint64_t>(request->uri + 1);
     log_printf("uuid requested: %s\n", request->uri + 1);
 
     // make sure the uuid exists
@@ -376,7 +375,7 @@ void handle_delete(mg_connection *conn,
 {
     // get the UUID
     const char *response_status = NULL;
-    uint64_t uuid = atoll(request->uri + 1);
+    uint64_t uuid = lexical_cast<uint64_t>(request->uri + 1);
     log_printf("uuid requested: %s\n", request->uri + 1);
 
     // find the UUID, and if found, delete it
