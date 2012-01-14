@@ -339,7 +339,11 @@ void handle_post(mg_connection *conn,
     std::string response_content;
 
     // do validity checking
+#ifdef _WIN32
     path p(request->uri + 1);
+#else
+    path p(request->uri);
+#endif
     if (exists(p))
     {
         // make sure we have permissions to open it for reading
