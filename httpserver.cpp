@@ -100,7 +100,7 @@ bool upnp_discovery()
     UPNPDev *devlist = upnpDiscover(2000, NULL, NULL, 0, 0, &error);
     if (!devlist)
     {
-        log_printf("upnp discovery failed.\n");
+        log_printf("upnp discovery failed: %d\n", error);
         return false;
     }
 
@@ -529,6 +529,15 @@ int main(int argc, char *argv[])
 	if (vm.count("port"))
 		port = vm["port"].as<std::string>();
 
+#ifdef _WIN32
+	WSADATA wsa_data;
+	int wsa_result = WSAStartup(MAKEWORD(2, 2), &wsa_data);
+	if (wsa_result != NO_ERROR)
+	{
+		log_printf("WSAStartup() failed: %d\n", wsa_result);
+		return 1;
+	}
+#endif
 
     // do UPnP discovery
     use_upnp = upnp_discovery();
