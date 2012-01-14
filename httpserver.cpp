@@ -213,7 +213,7 @@ void compress_directory(const path& directory_path,
     struct archive_entry *entry = archive_entry_new();
     
     // offset of the parent directory's full path
-	int len = (directory_path.parent_path().native().length() + 1) * sizeof(path::value_type);
+	int len = (directory_path.parent_path().native().length() + 1);
 
     recursive_directory_iterator end;
     recursive_directory_iterator iter(directory_path);
@@ -339,7 +339,7 @@ void handle_post(mg_connection *conn,
     std::string response_content;
 
     // do validity checking
-    path p(request->uri);
+    path p(request->uri + 1);
     if (exists(p))
     {
         // make sure we have permissions to open it for reading
@@ -367,6 +367,7 @@ void handle_post(mg_connection *conn,
             char body[128];
             char var[16];
             int body_size = mg_read(conn, body, sizeof(body));
+			body[body_size] = '\0';
             log_printf("body: %d, %s\n", body_size, body);
             if (mg_get_var(body, body_size, "count", var, sizeof(var)) != -1)
                 resource.count = atoi(var);
