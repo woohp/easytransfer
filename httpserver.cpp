@@ -72,21 +72,35 @@ void log_printf(const char *format, ...)
 }
 
 
-// returns 0 if all good, errno if can't open file
-int check_read_file(const path& p)
+// returns the HTTP status code string if error, else, NULL
+std::string check_path(const path& p)
 {
-    FILE *file = FOPEN(p.c_str(), T("r"));
-    if (file)
+    boost::system::error_code ec;
+    if (is_directory(p, ec))
     {
-        fclose(file);
-        return 0;
+        // TODO: figure out how to validate directories
+        return "";
+    }
+    else if (exists(p))
+    {
+        FILE *file = FOPEN(p.c_str(), T("r"));
+        if (file)
+        {
+            fclose(file);
+            return "";
+        }
+        else
+        {
+            log_printf("failed to open for reading. "
+                "does it have permissions?\t%s\n", p.c_str());
+            if (errno == EACCES)
+                return "403 Forbidden";
+            else
+                return "400 Bad Request";
+        }
     }
     else
-    {
-        log_printf("failed to open for reading. "
-                   "does it have permissions?\n\t%s\n", p.c_str());
-        return errno;
-    }
+        return "404 Not Found";
 }
 
 
@@ -265,7 +279,7 @@ void compress_directory(const path& directory_path,
 void handle_get(mg_connection *conn,
                 const mg_request_info *request)
 {
-    const char *response_status = NULL;
+    std::string response_status;
     uint64_t uuid = isdigit(request->uri[1])? lexical_cast<uint64_t>(request->uri + 1) : 0;
     log_printf("uuid requested: %s\n", request->uri + 1);
 
@@ -279,16 +293,13 @@ void handle_get(mg_connection *conn,
     {
         Resource &resource = mappings[uuid];
         path& p = resource.p;
-
-        // make sure the file exists
-        if (!exists(p)) 
-        {
-            log_printf("file no longer exists: %s\n", p.c_str());
+        
+        // check to see if the path is still valid
+        response_status = check_path(p);
+        if (response_status.length())
             mappings.erase(uuid);
-            response_status = "410 Gone";
-        }
         // make sure it hasn't expired
-        if (resource.expiration_time < time(NULL))
+        else if (resource.expiration_time < time(NULL))
         {
             log_printf("file has expired: %s\n", p.c_str());
             mappings.erase(uuid);
@@ -305,27 +316,18 @@ void handle_get(mg_connection *conn,
                 p = new_path;
             }
 
-            // try to open file to make sure it's readable
-            if (check_read_file(p)) // returning non-zero means error
-            {
+            // send the file
+            mg_send_file(conn, to_utf8(p.c_str()), to_utf8(p.filename().c_str()));
+            if (--resource.count == 0)
                 mappings.erase(uuid);
-                response_status = "410 Gone";
-            }
-            else
-            {
-                // send the file
-                mg_send_file(conn, to_utf8(p.c_str()), to_utf8(p.filename().c_str()));
-                if (--resource.count == 0)
-                    mappings.erase(uuid);
-                return;
-            }
+            return;
         }
     }
 
-    log_printf("responded with %s\n", response_status);
+    log_printf("responded with %s\n", response_status.c_str());
     mg_printf(conn, "HTTP/1.1 %s\r\n"
               "Content-Type: text/plain\r\n\r\n",
-              response_status);
+              response_status.c_str());
 }
 
 
@@ -335,7 +337,7 @@ void handle_post(mg_connection *conn,
 {
     static uniform_int<uint64_t> uuid_gen(
         0x100000000, 0x4000000000000000);
-    const char *response_status = NULL;
+    std::string response_status;
     std::string response_content;
 
     // do validity checking
@@ -344,65 +346,48 @@ void handle_post(mg_connection *conn,
 #else
     path p(request->uri);
 #endif
-    if (exists(p))
+    response_status = check_path(p);
+    if (response_status.length() == 0) // 0 means it's OK
     {
-        // make sure we have permissions to open it for reading
-        int err = check_read_file(p);
-        if (err)
+        // create the mapping
+        uint64_t uuid = uuid_gen(rng);
+        std::string uuid_str = lexical_cast<std::string>(uuid);
+
+        // create resource for only 1 download, expires in 1 hour by default
+        Resource resource;
+        resource.p = p;
+        resource.count = 1;
+        int duration = 3600; // 3600 seconds
+
+        // get the count and time query variables, if they are provided
+        char body[128];
+        char var[16];
+        int body_size = mg_read(conn, body, sizeof(body));
+		body[body_size] = '\0';
+        log_printf("body: %d, %s\n", body_size, body);
+        if (mg_get_var(body, body_size, "count", var, sizeof(var)) != -1)
+            resource.count = atoi(var);
+        if (mg_get_var(body, body_size, "time", var, sizeof(var)) != -1)
         {
-            if (err == EACCES)
-                response_status = "403 Forbidden";
-            else
-                response_status = "400 Bad Request";
+            duration = atoi(var);
+            resource.expiration_time = time(NULL) + duration;
         }
-        else
-        {
-            // create the mapping
-            uint64_t uuid = uuid_gen(rng);
-            std::string uuid_str = lexical_cast<std::string>(uuid);
 
-            // create resource for only 1 download, expires in 1 hour by default
-            Resource resource;
-            resource.p = p;
-            resource.count = 1;
-            int duration = 3600; // 3600 seconds
+        // create the mapping
+        mappings[uuid] = resource;
 
-            // get the count and time query variables, if they are provided
-            char body[128];
-            char var[16];
-            int body_size = mg_read(conn, body, sizeof(body));
-			body[body_size] = '\0';
-            log_printf("body: %d, %s\n", body_size, body);
-            if (mg_get_var(body, body_size, "count", var, sizeof(var)) != -1)
-                resource.count = atoi(var);
-            if (mg_get_var(body, body_size, "time", var, sizeof(var)) != -1)
-            {
-                duration = atoi(var);
-                resource.expiration_time = time(NULL) + duration;
-            }
-
-            // create the mapping
-            mappings[uuid] = resource;
-
-            log_printf("created mapping: %s - %s, count=%d, duration=%d\n",
-                       uuid_str.c_str(), request->uri, resource.count, duration);
-            response_status = "201 Created";
-            response_content = lexical_cast<std::string>(uuid);
-        }
-    }
-    else
-    {
-        log_printf("error: not found\n");
-        response_status = "404 Not Found";
+        log_printf("created mapping: %s - %s, count=%d, duration=%d\n",
+                    uuid_str.c_str(), request->uri, resource.count, duration);
+        response_status = "201 Created";
+        response_content = lexical_cast<std::string>(uuid);
     }
     
-    assert(response_status != NULL);
+    assert(response_status.length() > 0);
 
-    log_printf("responded with %s\n", response_status);
+    log_printf("responded with %s\n", response_status.c_str());
     mg_printf(conn, "HTTP/1.1 %s\r\n"
-              "Content-Type: text/plain\r\n\r\n"
-              "%s",
-              response_status, response_content.c_str());
+              "Content-Type: text/plain\r\n\r\n%s",
+              response_status.c_str(), response_content.c_str());
 }
 
 
