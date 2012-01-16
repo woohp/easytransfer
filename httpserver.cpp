@@ -495,7 +495,7 @@ void *callback(mg_event event,
 
 
 // main
-#ifdef _WIN32
+#if defined(_WIN32) && defined(NDEBUG)
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, 
                      LPSTR lpCmdLine, int nCmdShow)
 {
@@ -547,7 +547,6 @@ int main(int argc, char *argv[])
     {
         "listening_ports", port.c_str(),
         "enable_directory_listing", "no",
-        "num_threads", "1",
         NULL
     };
     ctx = mg_start(callback, NULL, options);
