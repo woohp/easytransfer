@@ -506,36 +506,36 @@ int main(int argc, char *argv[])
 {
 #endif
     // parse the commandline arguments
-	options_description desc("Allowed options");
-	desc.add_options()
-		("help,h", "produce this help message")
-		("verbose,v", "turn on verbose mode")
-		("port,p", value<std::string>(), "specify the port to run on")
-		;
-	variables_map vm;
-	store(parse_command_line(argc, argv, desc), vm);
-	notify(vm);
+    options_description desc("Allowed options");
+    desc.add_options()
+        ("help,h", "produce this help message")
+        ("verbose,v", "turn on verbose mode")
+        ("port,p", value<std::string>(), "specify the port to run on")
+        ;
+    variables_map vm;
+    store(parse_command_line(argc, argv, desc), vm);
+    notify(vm);
 
-	if (vm.count("help"))
-	{
-		std::cout << desc << '\n';
-		return 1;
-	}
+    if (vm.count("help"))
+    {
+        std::cout << desc << '\n';
+        return 1;
+    }
 
-	if (vm.count("verbose"))
-		verbose = true;
-	if (vm.count("port"))
-		port = vm["port"].as<std::string>();
+    if (vm.count("verbose"))
+        verbose = true;
+    if (vm.count("port"))
+        port = vm["port"].as<std::string>();
 
 
 #ifdef _WIN32
-	WSADATA wsa_data;
-	int wsa_result = WSAStartup(MAKEWORD(2, 2), &wsa_data);
-	if (wsa_result != NO_ERROR)
-	{
-		log_printf("WSAStartup() failed: %d\n", wsa_result);
-		return 1;
-	}
+    WSADATA wsa_data;
+    int wsa_result = WSAStartup(MAKEWORD(2, 2), &wsa_data);
+    if (wsa_result != NO_ERROR)
+    {
+        log_printf("WSAStartup() failed: %d\n", wsa_result);
+        return 1;
+    }
 #endif
 
     // do UPnP discovery
@@ -583,7 +583,7 @@ int main(int argc, char *argv[])
     log_printf("Press CTRL-C to quit.\n");
     for (;;)
 #ifdef _WIN32
-		Sleep(0xffffffff);
+        Sleep(0xffffffff);
 #else
         sleep(0xffffffff);
 #endif
