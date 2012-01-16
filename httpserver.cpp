@@ -495,8 +495,16 @@ void *callback(mg_event event,
 
 
 // main
+#ifdef _WIN32
+int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, 
+                     LPSTR lpCmdLine, int nCmdShow)
+{
+    int argc = __argc;
+    char **argv = __argv;
+#else
 int main(int argc, char *argv[])
 {
+#endif
     // parse the commandline arguments
 	options_description desc("Allowed options");
 	desc.add_options()
@@ -518,6 +526,7 @@ int main(int argc, char *argv[])
 		verbose = true;
 	if (vm.count("port"))
 		port = vm["port"].as<std::string>();
+
 
 #ifdef _WIN32
 	WSADATA wsa_data;
