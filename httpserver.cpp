@@ -340,7 +340,7 @@ void handle_post(mg_connection *conn,
 
     // do validity checking
 #ifdef _WIN32
-    path p(request->uri + 1);
+    path p(request->uri + 1); // tends to be /C:/...
 #else
     path p(request->uri);
 #endif
