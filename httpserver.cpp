@@ -40,23 +40,21 @@ const char* to_utf8(const wchar_t* str)
 #endif
 
 
-struct Resource
-{
-    path p;
-    int count;
-    time_t expiration_time;
-};
-
-
 // global variables
+bool verbose = false;           // verbose flag
 mt19937 rng(time(NULL));        // random number generator
 mg_context *ctx = NULL;         // the server instance
-std::string port = "1235";      // the port
+std::string port;               // the port
 bool use_upnp = false;          // whether we used UPnP to forward ports
 UPNPUrls urls;                  // UPnP variables
 IGDdatas data;
-std::map<uint64_t, Resource> mappings; // maps from uuid to Resource
-bool verbose = false;           // verbose flag
+
+path the_path;                  // path of the file
+uint64_t the_uuid;              // uuid of the resource
+int count;                      // how many downloads before expiration
+time_t expiration_time;         // the time at which it expires
+
+bool quit = false;
 
 
 // functions for logging
@@ -284,26 +282,26 @@ void handle_get(mg_connection *conn,
     log_printf("uuid requested: %s\n", request->uri + 1);
 
     // make sure the uuid exists
-    if (mappings.find(uuid) == mappings.end())
+    if (uuid != the_uuid)
     {
-        log_printf("uuid doesn't exist\n");
+        log_printf("uuid not correct\n");
         response_status = "404 Not Found";
+        quit = true;
     }
     else
     {
-        Resource &resource = mappings[uuid];
-        path& p = resource.p;
+        path& p = the_path;
         
         // check to see if the path is still valid
         response_status = check_path(p);
         if (response_status.length())
-            mappings.erase(uuid);
+            quit = true;
         // make sure it hasn't expired
-        else if (resource.expiration_time < time(NULL))
+        if (expiration_time < time(NULL))
         {
             log_printf("file has expired: %s\n", p.c_str());
-            mappings.erase(uuid);
             response_status = "410 Gone";
+            quit = true;
         }
         else
         {
@@ -318,8 +316,8 @@ void handle_get(mg_connection *conn,
 
             // send the file
             mg_send_file(conn, to_utf8(p.c_str()), to_utf8(p.filename().c_str()));
-            if (--resource.count == 0)
-                mappings.erase(uuid);
+            if (--count == 0)
+                quit = true;
             return;
         }
     }
@@ -328,95 +326,6 @@ void handle_get(mg_connection *conn,
     mg_printf(conn, "HTTP/1.1 %s\r\n"
               "Content-Type: text/plain\r\n\r\n",
               response_status.c_str());
-}
-
-
-// handle POST requests
-void handle_post(mg_connection *conn,
-                 const mg_request_info *request)
-{
-    static uniform_int<uint64_t> uuid_gen(
-        0x100000000, 0x4000000000000000);
-    std::string response_status;
-    std::string response_content;
-
-    // do validity checking
-#ifdef _WIN32
-    path p(request->uri + 1); // tends to be /C:/...
-#else
-    path p(request->uri);
-#endif
-    response_status = check_path(p);
-    if (response_status.length() == 0) // 0 means it's OK
-    {
-        // create the mapping
-        uint64_t uuid = uuid_gen(rng);
-        std::string uuid_str = lexical_cast<std::string>(uuid);
-
-        // create resource for only 1 download, expires in 1 hour by default
-        Resource resource;
-        resource.p = p;
-        resource.count = 1;
-        int duration = 3600; // 3600 seconds
-
-        // get the count and time query variables, if they are provided
-        char body[128];
-        char var[16];
-        int body_size = mg_read(conn, body, sizeof(body));
-		body[body_size] = '\0';
-        log_printf("body: %d, %s\n", body_size, body);
-        if (mg_get_var(body, body_size, "count", var, sizeof(var)) != -1)
-            resource.count = atoi(var);
-        if (mg_get_var(body, body_size, "time", var, sizeof(var)) != -1)
-        {
-            duration = atoi(var);
-            resource.expiration_time = time(NULL) + duration;
-        }
-
-        // create the mapping
-        mappings[uuid] = resource;
-
-        log_printf("created mapping: %s - %s, count=%d, duration=%d\n",
-                    uuid_str.c_str(), request->uri, resource.count, duration);
-        response_status = "201 Created";
-        response_content = lexical_cast<std::string>(uuid);
-    }
-    
-    assert(response_status.length() > 0);
-
-    log_printf("responded with %s\n", response_status.c_str());
-    mg_printf(conn, "HTTP/1.1 %s\r\n"
-              "Content-Type: text/plain\r\n\r\n%s",
-              response_status.c_str(), response_content.c_str());
-}
-
-
-// handle DELETE requests
-void handle_delete(mg_connection *conn,
-                   const mg_request_info *request)
-{
-    // get the UUID
-    const char *response_status = NULL;
-    uint64_t uuid = isdigit(request->uri[1])? lexical_cast<uint64_t>(request->uri + 1) : 0;
-    log_printf("uuid requested: %s\n", request->uri + 1);
-
-    // find the UUID, and if found, delete it
-    if (mappings.find(uuid) == mappings.end())
-    {
-        log_printf("uuid doesn't exist\n");
-        response_status = "404 Not Found";
-    }
-    else
-    {
-        log_printf("mapping erased\n");
-        mappings.erase(uuid);
-        response_status = "200 OK";
-    }
-
-    log_printf("responded with %s\n", response_status);
-    mg_printf(conn, "HTTP/1.1 %s\r\n"
-              "Content-Type: text/plain\r\n\r\n"
-              "%s", response_status);
 }
 
 
@@ -439,55 +348,12 @@ void *callback(mg_event event,
         log_printf("%s - %s\n", request->http_headers[i]);
 
     if (!strcmp(request->request_method, "GET"))
-    {
-        // if from localhost and no additional uri, then just list current mappings
-        if (request->remote_ip == 0x7f000001 && request->uri[1] == '\0')
-        {
-            log_printf("current state requested\n");
-
-            // remove expired mappings
-            std::vector<uint64_t> expired;
-            for (std::map<uint64_t, Resource>::iterator i = mappings.begin();
-                 i != mappings.end(); ++i)
-            {
-                if (i->second.expiration_time < time(NULL))
-                {
-                    log_printf("file has expired: %s\n", i->second.p.c_str());
-                    expired.push_back(i->first);
-                }
-            }
-            for (size_t i = 0; i < expired.size(); ++i)
-                mappings.erase(expired[i]);
-
-            mg_printf(conn, "HTTP/1.1 200 OK\r\n"
-                      "Content-Type: text/plain\r\n\r\n");
-            for (std::map<uint64_t, Resource>::iterator i = mappings.begin();
-                 i != mappings.end(); ++i)
-                mg_printf(conn, "%s,%s,%s,%s\n",
-                          lexical_cast<std::string>(i->first).c_str(),
-                          i->second.count,
-                          lexical_cast<std::string>(i->second.expiration_time).c_str(),
-                          i->second.p.c_str());
-        }
-        else
-            handle_get(conn, request);
-    }
-    else if (!strcmp(request->request_method, "POST"))
-    {
-        if (request->remote_ip != 0x7f000001) // only accept from localhost
-            log_printf("invalid ip for POST request: %x\n", request->remote_ip);
-        else
-            handle_post(conn, request);
-    }
-    else if (!strcmp(request->request_method, "DELETE"))
-    {
-        if (request->remote_ip != 0x7f000001) // only accept from localhost
-            log_printf("invalid ip for DELETE request: %x\n", request->remote_ip);
-        else
-            handle_delete(conn, request);
-    }
+        handle_get(conn, request);
 
     putchar('\n');
+
+    if (quit)
+        raise(SIGTERM);
 
     return (void*)1;
 }
@@ -506,28 +372,53 @@ int main(int argc, char *argv[])
 {
 #endif
     // parse the commandline arguments
-    options_description desc("Allowed options");
+    options_description desc("Usage: httpserver [options] path\nAllowed options");
     desc.add_options()
-        ("help,h", "produce this help message")
+        ("path", value<std::string>(), "path of the file/folder (required, can also the last argument)")
+        ("count,c", value<int>()->default_value(1), "maximum download count before the link expires")
+        ("duration,d", value<unsigned int>()->default_value(60), "time before the link expires, in minutes")
+        ("port,p", value<std::string>()->default_value("1235"), "specify the port to run on")
         ("verbose,v", "turn on verbose mode")
-        ("port,p", value<std::string>(), "specify the port to run on")
+        ("help,h", "produce this help message")
         ;
+    positional_options_description pos_desc;
+    pos_desc.add("path", 1);
+    parsed_options parsed = command_line_parser(argc, argv).options(desc).positional(pos_desc).run();
     variables_map vm;
-    store(parse_command_line(argc, argv, desc), vm);
+    store(parsed, vm);
     notify(vm);
 
+    if (!vm.count("path"))
+    {
+        std::cout << desc << '\n';
+        return 1;
+    }
+    else
+        the_path = absolute(vm["path"].as<std::string>());
+    count = vm["count"].as<int>();
+    unsigned int duration = vm["duration"].as<unsigned int>() * 60; // * 60 to get seconds
+    expiration_time = time(NULL) * 60 + duration;
+    port = vm["port"].as<std::string>();
     if (vm.count("help"))
     {
         std::cout << desc << '\n';
         return 1;
     }
-
     if (vm.count("verbose"))
         verbose = true;
-    if (vm.count("port"))
-        port = vm["port"].as<std::string>();
+
+    
+    // check the path first
+    log_printf("checking path: %s\n", the_path.c_str());
+    std::string path_status = check_path(the_path);
+    if (path_status.length() > 0)
+    {
+        std::cout << path_status << '\n';
+        return 1;
+    }
 
 
+    // call WSAStartup on windows
 #ifdef _WIN32
     WSADATA wsa_data;
     int wsa_result = WSAStartup(MAKEWORD(2, 2), &wsa_data);
@@ -557,6 +448,7 @@ int main(int argc, char *argv[])
     }
     log_printf("succeded.\n");
 
+    // setup the signal handlers
     signal(SIGINT, sig_hand);
     signal(SIGTERM, sig_hand);
 #ifdef _WIN32
@@ -565,27 +457,16 @@ int main(int argc, char *argv[])
     signal(SIGQUIT, sig_hand);
 #endif
 
-    // write the port to a temporary settings file
-    log_printf("writing settings file...");
-    path settings_filename = temp_directory_path() / ".httpserver";
-    FILE *settings_file = FOPEN(settings_filename.c_str(), T("w"));
-    if (settings_file)
-    {
-        fputs(port.c_str(), settings_file);
-        fclose(settings_file);
-        log_printf("succeeded.\n");
-    }
-    else
-        log_printf("failed.\n");
 
-    // go to sleep for a very long time
+    // go to sleep for a very long time (want a better way for this)
     log_printf("Press CTRL-C to quit.\n");
-    for (;;)
 #ifdef _WIN32
-        Sleep(0xffffffff);
+    Sleep(duration * 1000);
 #else
-        sleep(0xffffffff);
+    sleep(duration);
 #endif
+
+    raise(SIGTERM);
     
     return 0;
 }
