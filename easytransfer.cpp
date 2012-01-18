@@ -7,6 +7,12 @@
 #include <signal.h>
 #include <string>
 #include <map>
+#ifndef _WIN32
+#include <sys/types.h>
+#include <sys/socket.h>
+//#include <netinet/in.h>
+#include <netdb.h>
+#endif
 #include <boost/filesystem.hpp>
 #include <boost/random.hpp>
 #include <boost/lexical_cast.hpp>
@@ -99,6 +105,60 @@ std::string check_path(const path& p)
     }
     else
         return "404 Not Found";
+}
+
+
+std::string get_external_ip()
+{
+    // do DNS lookup of whatismyip
+    struct addrinfo hints;
+    struct addrinfo *servinfo, *p;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+    int status = getaddrinfo("automation.whatismyip.com", "http", &hints, &servinfo);
+    if (status != 0) return "";
+
+    // create the socket
+    int sock;
+    const char *query = "GET http://automation.whatismyip.com/n09230945.asp\r\n\r\n";
+    for (p = servinfo; p != NULL; p = p->ai_next)
+    {
+        sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (socket < 0) continue;
+
+        if (connect(sock, p->ai_addr, p->ai_addrlen) == -1)
+        {
+            close(sock);
+            continue;
+        }
+
+        break;
+    }
+    if (p == NULL) return "";
+
+    // send http request
+    if (send(sock, query, strlen(query), 0) < 0)
+    {
+        close(sock);
+        return "";
+    }
+
+    // get response
+    char answer[256];
+    int size = recv(sock, answer, sizeof(answer), 0);
+    if (size < 0)
+    {
+        close(sock);
+        return "";
+    }
+    close(sock);
+    answer[size] = '\0';
+
+    const char *pos = strstr(answer, "\r\n\r\n");
+    if (pos == NULL) return "";
+    return pos + 4;
 }
 
 
@@ -278,7 +338,15 @@ void handle_get(mg_connection *conn,
                 const mg_request_info *request)
 {
     std::string response_status;
-    uint64_t uuid = isdigit(request->uri[1])? lexical_cast<uint64_t>(request->uri + 1) : 0;
+    uint64_t uuid;
+    try
+    {
+        uuid = isdigit(request->uri[1])? lexical_cast<uint64_t>(request->uri + 1) : 0;
+    }
+    catch (bad_lexical_cast ex)
+    {
+        return;
+    }
     log_printf("uuid requested: %s\n", request->uri + 1);
 
     // make sure the uuid exists
@@ -286,7 +354,6 @@ void handle_get(mg_connection *conn,
     {
         log_printf("uuid not correct\n");
         response_status = "404 Not Found";
-        quit = true;
     }
     else
     {
@@ -394,7 +461,7 @@ int main(int argc, char *argv[])
         return 1;
     }
     else
-        the_path = absolute(vm["path"].as<std::string>());
+        the_path = canonical(vm["path"].as<std::string>());
     count = vm["count"].as<int>();
     unsigned int duration = vm["duration"].as<unsigned int>() * 60; // * 60 to get seconds
     expiration_time = time(NULL) * 60 + duration;
@@ -416,6 +483,12 @@ int main(int argc, char *argv[])
         std::cout << path_status << '\n';
         return 1;
     }
+
+
+    uniform_int<uint64_t> uuid_gen(
+        0x100000000, 0x4000000000000000);
+    the_uuid = uuid_gen(rng);
+    std::cout << "http://" << get_external_ip() << ':' << port << '/' << the_uuid << '\n';
 
 
     // call WSAStartup on windows
