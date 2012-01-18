@@ -1,4 +1,4 @@
 *.o
-httpserver
+easytransfer
 .sconsign.dblite
 *.swp

@@ -338,15 +338,13 @@ void handle_get(mg_connection *conn,
                 const mg_request_info *request)
 {
     std::string response_status;
-    uint64_t uuid;
+    uint64_t uuid = 0;
     try
     {
         uuid = isdigit(request->uri[1])? lexical_cast<uint64_t>(request->uri + 1) : 0;
     }
     catch (bad_lexical_cast ex)
-    {
-        return;
-    }
+    { }
     log_printf("uuid requested: %s\n", request->uri + 1);
 
     // make sure the uuid exists
@@ -363,13 +361,6 @@ void handle_get(mg_connection *conn,
         response_status = check_path(p);
         if (response_status.length())
             quit = true;
-        // make sure it hasn't expired
-        if (expiration_time < time(NULL))
-        {
-            log_printf("file has expired: %s\n", p.c_str());
-            response_status = "410 Gone";
-            quit = true;
-        }
         else
         {
             // if it's a directory, compress it
@@ -469,12 +460,11 @@ int main(int argc, char *argv[])
     if (vm.count("help"))
     {
         std::cout << desc << '\n';
-        return 1;
+        return 0;
     }
-    if (vm.count("verbose"))
-        verbose = true;
-
+    verbose = vm.count("verbose") > 0;
     
+
     // check the path first
     log_printf("checking path: %s\n", the_path.c_str());
     std::string path_status = check_path(the_path);
@@ -483,12 +473,6 @@ int main(int argc, char *argv[])
         std::cout << path_status << '\n';
         return 1;
     }
-
-
-    uniform_int<uint64_t> uuid_gen(
-        0x100000000, 0x4000000000000000);
-    the_uuid = uuid_gen(rng);
-    std::cout << "http://" << get_external_ip() << ':' << port << '/' << the_uuid << '\n';
 
 
     // call WSAStartup on windows
@@ -501,6 +485,18 @@ int main(int argc, char *argv[])
         return 1;
     }
 #endif
+
+    // get external ip, and quit if that failed
+    std::string external_ip = get_external_ip();
+    if (external_ip.length() == 0)
+    {
+        log_printf("failed to get external ip\n");
+        return 1;
+    }
+
+    // create the UUID, and hence, the full link, and print it
+    the_uuid = uniform_int<uint64_t>(0x100000000, 0x4000000000000000)(rng);
+    std::cout << "http://" << external_ip << ':' << port << '/' << the_uuid << '\n';
 
     // do UPnP discovery
     use_upnp = upnp_discovery();
@@ -517,7 +513,7 @@ int main(int argc, char *argv[])
     if (!ctx)
     {
         log_printf("failed.\n");
-        return 0;
+        return 1;
     }
     log_printf("succeded.\n");
 
