@@ -372,7 +372,7 @@ int main(int argc, char *argv[])
 {
 #endif
     // parse the commandline arguments
-    options_description desc("Usage: httpserver [options] path\nAllowed options");
+    options_description desc("Usage: easytransfer [options] path\nAllowed options");
     desc.add_options()
         ("path", value<std::string>(), "path of the file/folder (required, can also the last argument)")
         ("count,c", value<int>()->default_value(1), "maximum download count before the link expires")
