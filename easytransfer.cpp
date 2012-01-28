@@ -33,9 +33,9 @@ using namespace boost::program_options;
 #define T(x) L##x
 const char* to_utf8(const wchar_t* str)
 {
-	static char buffer[512]; // hopefully, 512 is long enough
-	WideCharToMultiByte(CP_UTF8, 0, str, -1, buffer, sizeof(buffer), NULL, NULL);
-	return buffer;
+    static char buffer[512]; // hopefully, 512 is long enough
+    WideCharToMultiByte(CP_UTF8, 0, str, -1, buffer, sizeof(buffer), NULL, NULL);
+    return buffer;
 }
 #define FOPEN _wfopen
 #else
@@ -49,6 +49,8 @@ const char* to_utf8(const wchar_t* str)
 // global variables
 bool verbose = false;           // verbose flag
 mt19937 rng(time(NULL));        // random number generator
+uniform_smallint<uint16_t> port_gen(5000, 65535);
+
 mg_context *ctx = NULL;         // the server instance
 std::string port;               // the port
 bool use_upnp = false;          // whether we used UPnP to forward ports
@@ -201,7 +203,6 @@ bool upnp_discovery()
     char intPort[6];
     char duration[16];
     bool has_mapping = false;
-    static uniform_smallint<uint16_t> port_gen(5000, 65535);
     for (;;)
     {
         int r = UPNP_GetSpecificPortMappingEntry(
@@ -250,22 +251,25 @@ bool upnp_discovery()
     return true;
 }
 
+// removes a UPnP mapping
+void remove_upnp_mapping()
+{
+    int r = UPNP_DeletePortMapping(
+        urls.controlURL, data.first.servicetype,
+        port.c_str(), "TCP", NULL);
+    if (r)
+        log_printf("failed to delete port mapping: %d\n", r);
+    else
+        log_printf("deleted port mapping.\n");
+}
 
 static void sig_hand(int code)
 {
-	log_printf("quitting...\n");
+    log_printf("quitting...\n");
     mg_stop(ctx);
     if (use_upnp)
-    {
-        int r = UPNP_DeletePortMapping(
-            urls.controlURL, data.first.servicetype,
-			port.c_str(), "TCP", NULL);
-		if (r)
-			log_printf("failed to delete port mapping: %d\n", r);
-		else
-			log_printf("deleted port mapping.\n");
-	}
-	exit(EXIT_SUCCESS);
+        remove_upnp_mapping();
+    exit(EXIT_SUCCESS);
 }
 
 
@@ -366,7 +370,11 @@ void handle_get(mg_connection *conn,
             // if it's a directory, compress it
             if (is_directory(p))
             {
-                path new_path = temp_directory_path() / p.filename();
+                path::string_type filename = p.filename().native();
+                if (filename[0] == '.')
+                    filename.erase(0, 1);
+                path new_path = temp_directory_path() / filename;
+
                 new_path.replace_extension(".tgz");
                 compress_directory(p, new_path);
                 p = new_path;
@@ -374,6 +382,7 @@ void handle_get(mg_connection *conn,
 
             // send the file
             mg_send_file(conn, to_utf8(p.c_str()), to_utf8(p.filename().c_str()));
+            log_printf("finished sending the file.\n");
             if (--count == 0)
                 quit = true;
             return;
@@ -435,7 +444,6 @@ int main(int argc, char *argv[])
         ("path", value<std::string>(), "path of the file/folder (required, can also the last argument)")
         ("count,c", value<int>()->default_value(1), "maximum download count before the link expires")
         ("duration,d", value<unsigned int>()->default_value(60), "time before the link expires, in minutes")
-        ("port,p", value<std::string>()->default_value("1235"), "specify the port to run on")
         ("verbose,v", "turn on verbose mode")
         ("help,h", "produce this help message")
         ;
@@ -449,14 +457,13 @@ int main(int argc, char *argv[])
     if (!vm.count("path"))
     {
         std::cout << desc << '\n';
-        return 1;
+        return EXIT_FAILURE;
     }
     else
         the_path = canonical(vm["path"].as<std::string>());
     count = vm["count"].as<int>();
     unsigned int duration = vm["duration"].as<unsigned int>() * 60; // * 60 to get seconds
     expiration_time = time(NULL) * 60 + duration;
-    port = vm["port"].as<std::string>();
     if (vm.count("help"))
     {
         std::cout << desc << '\n';
@@ -471,7 +478,7 @@ int main(int argc, char *argv[])
     if (path_status.length() > 0)
     {
         std::cout << path_status << '\n';
-        return 1;
+        return EXIT_FAILURE;
     }
 
 
@@ -482,7 +489,7 @@ int main(int argc, char *argv[])
     if (wsa_result != NO_ERROR)
     {
         log_printf("WSAStartup() failed: %d\n", wsa_result);
-        return 1;
+        return EXIT_FAILURE;
     }
 #endif
 
@@ -491,31 +498,40 @@ int main(int argc, char *argv[])
     if (external_ip.length() == 0)
     {
         log_printf("failed to get external ip\n");
-        return 1;
+        return EXIT_FAILURE;
     }
 
-    // create the UUID, and hence, the full link, and print it
-    the_uuid = uniform_int<uint64_t>(0x100000000, 0x4000000000000000)(rng);
-    std::cout << "http://" << external_ip << ':' << port << '/' << the_uuid << '\n';
-
-    // do UPnP discovery
-    use_upnp = upnp_discovery();
-
-    // start the server
-    log_printf("Starting server on port %s...", port.c_str());
-    const char* options[] =
+    // try to start server
+    int i;
+    for (i = 0; i < 10; ++i)
     {
-        "listening_ports", port.c_str(),
-        "enable_directory_listing", "no",
-        NULL
-    };
-    ctx = mg_start(callback, NULL, options);
-    if (!ctx)
-    {
-        log_printf("failed.\n");
-        return 1;
+        // generate new random port
+        port = lexical_cast<std::string>(port_gen(rng));
+
+        // try to do UPnP discovery
+        use_upnp = upnp_discovery();
+
+        // start the server
+        log_printf("Starting server on port %s...", port.c_str());
+        const char* options[] =
+        {
+            "listening_ports", port.c_str(),
+            "enable_directory_listing", "no",
+            NULL
+        };
+        ctx = mg_start(callback, NULL, options);
+        if (ctx)
+            break;
+        else
+            remove_upnp_mapping();
     }
-    log_printf("succeded.\n");
+    if (i == 10)
+    {
+        log_printf("failed to start server after trying many times.\n");
+        return EXIT_FAILURE;
+    }
+    else
+        log_printf("succeded.\n");
 
     // setup the signal handlers
     signal(SIGINT, sig_hand);
@@ -526,6 +542,9 @@ int main(int argc, char *argv[])
     signal(SIGQUIT, sig_hand);
 #endif
 
+    // create the UUID, and hence, the full link, and print it
+    the_uuid = uniform_int<uint64_t>(0x100000000, 0x4000000000000000)(rng);
+    std::cout << "http://" << external_ip << ':' << port << '/' << the_uuid << '\n';
 
     // go to sleep for a very long time (want a better way for this)
     log_printf("Press CTRL-C to quit.\n");
