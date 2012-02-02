@@ -448,8 +448,8 @@ void *callback(mg_event event,
 
     putchar('\n');
 
-    if (quit)
-        raise(SIGTERM);
+//    if (quit)
+//        raise(SIGTERM);
 
     return (void*)1;
 }
@@ -471,8 +471,8 @@ int main(int argc, char *argv[])
     options_description desc("Usage: easytransfer [options] path\nAllowed options");
     desc.add_options()
         ("path", value<std::string>(), "path of the file/folder (required, can also the last argument)")
-        ("count,c", value<int>()->default_value(3), "maximum download count before the link expires")
-        ("duration,d", value<unsigned int>()->default_value(60), "time before the link expires, in minutes")
+        ("count,c", value<int>()->default_value(2), "maximum download count before the link expires")
+        ("duration,d", value<unsigned int>()->default_value(30), "time before the link expires, in minutes")
         ("verbose,v", "turn on verbose mode")
         ("help,h", "produce this help message")
         ;
@@ -489,7 +489,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
     else
-        the_path = canonical(vm["path"].as<std::string>());
+        the_path = vm["path"].as<std::string>();
     count = vm["count"].as<int>();
     unsigned int duration = vm["duration"].as<unsigned int>() * 60; // * 60 to get seconds
     expiration_time = time(NULL) * 60 + duration;

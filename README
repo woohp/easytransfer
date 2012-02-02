@@ -12,3 +12,10 @@ This program will automatically forward ports using UPnP. If you are behind
 a router without UPnP, it will probably not work.
 
 So far, it is only tested on Mac OS X, but full support for Windows and Linux is coming.
+
+This program requires the boost, libarchive, and miniupnpc. It also
+depends on mongoose, but a slightly modified version is included with
+the source code. The make system is based on scons. If you have scons
+installed, you can compile it by typing 'scons' in the folder.
+
+This program is released under the BSD license.
