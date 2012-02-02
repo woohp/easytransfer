@@ -27,4 +27,7 @@ If you have scons installed, you can compile it by typing 'scons' in the folder.
 You can install it by typing 'scons install'. You can remove it by just deleting
 easytransfer from /usr/local/bin.
 
+On Ubuntu (and probably Debian as well), use this to install all dependencies:
+sudo apt-get install libboost-filesystem-dev libboost-system-dev libboost-program-options-dev libminiupnpc-dev libarchive-dev
+
 This program is released under the BSD license.
