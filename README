@@ -1,21 +1,30 @@
-EasyTransfer is to easily send one program to another person.
+EasyTransfer is a program used to easily send one file to another person.
 
 easytransfer <file_to_send>
 
 It will run a HTTP server in the background, and give you a link for the file.
-The link, by default, expires in 1 hour or 3 downloads, whichever comes first.
+The link expires in 30 minutes or 2 downloads, whichever comes first.
 Directories are supported:
 easytransfer <folder_to_send>
 The folder will automatically be compressed before being sent.
 
-This program will automatically forward ports using UPnP. If you are behind
-a router without UPnP, it will probably not work.
+The file will NOT be saved in the cloud. The file is tranferred directly from
+your computer to the other person's computer.
 
-So far, it is only tested on Mac OS X, but full support for Windows and Linux is coming.
+For a full list of options, type
+easytransfer -h
 
-This program requires the boost, libarchive, and miniupnpc. It also
-depends on mongoose, but a slightly modified version is included with
-the source code. The make system is based on scons. If you have scons
-installed, you can compile it by typing 'scons' in the folder.
+This program will automatically forward ports using UPnP. If you are behind a
+router without UPnP, it will probably not work.
+
+It is tested on Linux and Mac OS X, but full support for Windows is coming.
+
+This program requires the boost, libarchive, and miniupnpc. Specifically, it
+requires boost_filesystem, boost_system, and boost_program_option.
+It uses mongoose library as a lightweigh HTTP server, but a slightly modified
+version is included with the source code. The make system is based on scons.
+If you have scons installed, you can compile it by typing 'scons' in the folder.
+You can install it by typing 'scons install'. You can remove it by just deleting
+easytransfer from /usr/local/bin.
 
 This program is released under the BSD license.

@@ -530,50 +530,62 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    // try to start server
-    int i;
-    for (i = 0; i < 10; ++i)
-    {
-        // generate new random port
-        port = lexical_cast<std::string>(port_gen(rng));
+    // create the UUID, and hence, the full link, and print it
+    the_uuid = uniform_int<uint64_t>(0x100000000, 0x4000000000000000)(rng);
+    port = lexical_cast<std::string>(port_gen(rng));
+    std::cout << "http://" << external_ip << ':' << port << '/' << the_uuid << '\n';
 
-        // try to do UPnP discovery
-        use_upnp = upnp_discovery();
-
-        // start the server
-        log_printf("Starting server on port %s...", port.c_str());
-        const char* options[] =
-        {
-            "listening_ports", port.c_str(),
-            "enable_directory_listing", "no",
-            NULL
-        };
-        ctx = mg_start(callback, NULL, options);
-        if (ctx)
-            break;
-        else
-            remove_upnp_mapping();
-    }
-    if (i == 10)
+    // fork off as daemon
+#ifndef _WIN32
+    if (!verbose)
     {
-        log_printf("failed to start server after trying many times.\n");
-        return EXIT_FAILURE;
+        pid_t pid = fork();
+        // fork off parent process
+        if (pid < 0)
+            return EXIT_FAILURE;
+        else if (pid > 0)
+            return EXIT_SUCCESS;
+        
+        umask(0); // change the file mode mask
+        
+        // create new SID for child process
+        pid_t sid = setsid();
+        if (sid < 0)
+            exit(EXIT_FAILURE);
+        
+        // close out standard file descriptors
+        close(STDIN_FILENO);
+        close(STDOUT_FILENO);
+        close(STDERR_FILENO);
     }
+#endif
+
+    // try to do UPnP discovery
+    use_upnp = upnp_discovery();
+    
+    // start the server
+    log_printf("Starting server on port %s...", port.c_str());
+    const char* options[] =
+    {
+        "listening_ports", port.c_str(),
+        "enable_directory_listing", "no",
+        NULL
+    };
+    ctx = mg_start(callback, NULL, options);
+    if (!ctx)
+        raise(SIGTERM);
     else
         log_printf("succeded.\n");
 
     // setup the signal handlers
     signal(SIGINT, sig_hand);
     signal(SIGTERM, sig_hand);
-#ifdef _WIN32
-    signal(SIGBREAK, sig_hand);
-#else
+#ifdef SIGQUIT
     signal(SIGQUIT, sig_hand);
 #endif
-
-    // create the UUID, and hence, the full link, and print it
-    the_uuid = uniform_int<uint64_t>(0x100000000, 0x4000000000000000)(rng);
-    std::cout << "http://" << external_ip << ':' << port << '/' << the_uuid << '\n';
+#ifdef SIGBREAK
+    signal(SIGBREAK, sig_hand);
+#endif
 
     // go to sleep for a very long time (want a better way for this)
     log_printf("Press CTRL-C to quit.\n");
