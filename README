@@ -3,7 +3,7 @@ EasyTransfer is to easily send one program to another person.
 easytransfer <file_to_send>
 
 It will run a HTTP server in the background, and give you a link for the file.
-The link, by default, expires in 1 hour or 3 downloads, whicheve comes first.
+The link, by default, expires in 1 hour or 3 downloads, whichever comes first.
 Directories are supported:
 easytransfer <folder_to_send>
 The folder will automatically be compressed before being sent.
