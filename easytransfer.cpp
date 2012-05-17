@@ -11,11 +11,8 @@
  * 3. All advertising materials mentioning features or use of this software
  *    must display the following acknowledgement:
  *    This product includes software developed by Hui Peng Hu.
- * 4. Neither the name of the <organization> nor the
- *    names of its contributors may be used to endorse or promote products
- *    derived from this software without specific prior written permission.
  *
- *    THIS SOFTWARE IS PROVIDED BY <COPYRIGHT HOLDER> ''AS IS'' AND ANY
+ *    THIS SOFTWARE IS PROVIDED BY Hui Peng Hu ''AS IS'' AND ANY
  *    EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
  *    WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
  *    DISCLAIMED. IN NO EVENT SHALL <COPYRIGHT HOLDER> BE LIABLE FOR ANY
@@ -153,7 +150,9 @@ std::string get_external_ip()
 
     // create the socket
     int sock;
-    const char *query = "GET http://automation.whatismyip.com/n09230945.asp\r\n\r\n";
+    const char *query = "GET /n09230945.asp HTTP/1.1\r\n"
+        "Connection: close\r\n"
+        "User-Agent: Mozilla/5.0 (Windows NT 6.1; WOW64; rv:12.0) Gecko/20100101 Firefox/12.0\r\n\r\n";
     for (p = servinfo; p != NULL; p = p->ai_next)
     {
         sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -177,7 +176,7 @@ std::string get_external_ip()
     }
 
     // get response
-    char answer[256];
+    char answer[1024];
     int size = recv(sock, answer, sizeof(answer), 0);
     if (size < 0)
     {
