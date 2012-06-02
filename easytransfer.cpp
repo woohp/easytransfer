@@ -151,7 +151,7 @@ std::string get_external_ip()
     // create the socket
     int sock;
     const char *query = "GET /n09230945.asp HTTP/1.1\r\n"
-        "Connection: close\r\n"
+        "Host: automation.whatismyip.com\r\n"
         "User-Agent: Mozilla/5.0 (Windows NT 6.1; WOW64; rv:12.0) Gecko/20100101 Firefox/12.0\r\n\r\n";
     for (p = servinfo; p != NULL; p = p->ai_next)
     {
